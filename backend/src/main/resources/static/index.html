@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>STOMP Client Interceptor Tester</title>
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+
+  <header>
+    <div class="brand">
+      <div class="brand-icon">S</div>
+      <div>
+        <h1>STOMP WebSocket Tester</h1>
+        <p style="font-size: 0.75rem; color: var(--text-muted);">Spring Backend & Chrome Extension Test Client</p>
+      </div>
+    </div>
+    <div id="connectionStatus" class="status-badge">
+      <span class="status-dot"></span>
+      <span id="statusText">Disconnected</span>
+    </div>
+  </header>
+
+  <div class="container">
+    <!-- Sidebar: Connection & Topic Controls -->
+    <div class="sidebar">
+      
+      <!-- Connection Setup Card -->
+      <div class="card">
+        <div class="card-title">WebSocket Endpoint</div>
+        <div class="form-group">
+          <label for="wsUrl">Broker URL</label>
+          <input type="text" id="wsUrl" value="ws://localhost:8080/ws">
+        </div>
+        <div class="btn-group">
+          <button id="btnConnect" class="btn btn-primary" style="flex:1;">Connect</button>
+          <button id="btnDisconnect" class="btn btn-danger" style="flex:1;" disabled>Disconnect</button>
+        </div>
+      </div>
+
+      <!-- Subscription Manager Card -->
+      <div class="card">
+        <div class="card-title">Subscriptions</div>
+        <div class="form-group">
+          <label for="subTopic">Topic Destination</label>
+          <input type="text" id="subTopic" value="/topic/messages">
+        </div>
+        <button id="btnSubscribe" class="btn btn-secondary" style="width:100%;" disabled>+ Subscribe</button>
+
+        <div class="subscription-list" id="subscriptionList">
+          <!-- Active subscriptions will render here -->
+        </div>
+      </div>
+
+      <!-- Quick Tips Card -->
+      <div class="card" style="background-color: rgba(30, 41, 59, 0.4); border-style: dashed;">
+        <div class="card-title" style="font-size: 0.85rem; color: var(--accent-primary);">Chrome Extension Testing</div>
+        <p style="font-size: 0.8rem; color: var(--text-muted); line-height: 1.4;">
+          Open your Chrome Extension popup on this tab to record STOMP frames, save sessions in Dexie DB, and replay recorded STOMP scenarios!
+        </p>
+      </div>
+
+    </div>
+
+    <!-- Main Content: Message Publisher & Live Log -->
+    <div class="main-content">
+      
+      <!-- STOMP Message Sender Card -->
+      <div class="card">
+        <div class="card-title">
+          <span>Publish STOMP Message</span>
+          <span style="font-size: 0.8rem; font-weight: normal; color: var(--text-muted);">Send to @MessageMapping</span>
+        </div>
+        
+        <div class="form-group">
+          <label for="pubDestination">Destination Prefix (/app/...)</label>
+          <input type="text" id="pubDestination" value="/app/chat">
+        </div>
+
+        <div class="form-group">
+          <label>Presets</label>
+          <div class="preset-pills">
+            <span class="pill" onclick="applyPreset('chat')">Chat Message</span>
+            <span class="pill" onclick="applyPreset('echo')">Echo Request</span>
+            <span class="pill" onclick="applyPreset('custom')">Custom Payload</span>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="pubPayload">Message Body (JSON / Text)</label>
+          <textarea id="pubPayload">{
+  "sender": "Frontend Tester",
+  "content": "Hello STOMP broker!",
+  "type": "CHAT"
+}</textarea>
+        </div>
+
+        <div style="display: flex; justify-content: flex-end;">
+          <button id="btnSend" class="btn btn-primary" disabled>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+            Send Frame
+          </button>
+        </div>
+      </div>
+
+      <!-- Intercepted Message Log Feed -->
+      <div class="card">
+        <div class="card-title feed-header">
+          <span>Live STOMP Frame Log</span>
+          <button id="btnClearLog" class="btn btn-secondary" style="padding: 0.3rem 0.6rem; font-size: 0.75rem;">Clear Log</button>
+        </div>
+
+        <div class="feed-list" id="feedList">
+          <div style="text-align: center; color: var(--text-muted); padding: 2rem; font-size: 0.85rem;">
+            No STOMP frames recorded yet. Click "Connect" to initiate WebSocket session.
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script src="js/stomp-client.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
