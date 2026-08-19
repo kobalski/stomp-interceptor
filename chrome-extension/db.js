@@ -1,4 +1,5 @@
 import './lib/dexie.min.js';
+import { buildStompFrame } from './stomp-parser.js';
 
 // Dexie is available globally as self.Dexie or window.Dexie or Dexie
 const Dexie = self.Dexie;
@@ -57,6 +58,19 @@ export async function saveFrame(sessionId, direction, frameInfo) {
       frameCount: (session.frameCount || 0) + 1
     });
   }
+}
+
+export async function updateFrame(frameId, newBody) {
+  if (!frameId) return;
+  const frame = await db.frames.get(frameId);
+  if (!frame) return;
+
+  const rawPayload = buildStompFrame(frame.stompCommand, frame.headers, newBody);
+
+  await db.frames.update(frameId, {
+    body: newBody,
+    rawPayload: rawPayload
+  });
 }
 
 export async function getSessions() {

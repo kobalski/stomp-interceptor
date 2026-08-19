@@ -127,6 +127,14 @@ async function handleMessage(message, sender) {
       return { success: true, frameCount: frames.length };
     }
 
+    case 'REPLAY_SINGLE_FRAME': {
+      const { tabId, frame, mode = 'CLIENT' } = message;
+      if (!tabId || !frame) throw new Error('Tab ID and frame object are required for replay');
+
+      await executeReplaySequence(tabId, [frame], mode, 0);
+      return { success: true };
+    }
+
     default:
       return { success: false, error: 'Unknown message type' };
   }

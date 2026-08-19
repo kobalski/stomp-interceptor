@@ -1,4 +1,5 @@
-import { getSessions, getSessionFrames, deleteSession, importSessionJSON } from '../db.js';
+import { getSessions, getSessionFrames, deleteSession, importSessionJSON, updateFrame } from '../db.js';
+import { JsonEditor } from '../components/json-editor.js';
 
 let activeSessionId = null;
 let currentFrames = [];
@@ -134,15 +135,9 @@ frameSearch.addEventListener('input', () => {
 });
 
 // Inspect Frame Details
-function inspectFrame(frame) {
-  let formattedBody = frame.body;
-  try {
-    const parsed = JSON.parse(frame.body);
-    formattedBody = JSON.stringify(parsed, null, 2);
-  } catch (e) {
-    // String body
-  }
+let currentJsonEditor = null;
 
+function inspectFrame(frame) {
   const headersJson = JSON.stringify(frame.headers || {}, null, 2);
 
   inspectorContent.innerHTML = `
@@ -167,15 +162,74 @@ function inspectFrame(frame) {
     </div>
 
     <div class="inspector-section">
-      <div class="inspector-label">Message Payload</div>
-      <pre class="code-block">${escapeHtml(formattedBody)}</pre>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">
+        <div class="inspector-label">Message Payload (JSON Editor)</div>
+        <div style="display:flex; gap:0.4rem;">
+          <button id="btnSavePayload" class="btn btn-secondary" style="padding:0.25rem 0.5rem; font-size:0.75rem;">💾 Save</button>
+          <button id="btnReplayFrame" class="btn btn-cyan" style="padding:0.25rem 0.5rem; font-size:0.75rem;">► Replay Frame</button>
+        </div>
+      </div>
+      <div id="jsonEditorContainer"></div>
     </div>
 
-    <div class="inspector-section">
+    <div class="inspector-section" style="margin-top:0.5rem;">
       <div class="inspector-label">Raw WebSocket Frame</div>
       <pre class="code-block" style="font-size:0.75rem; color:var(--text-muted);">${escapeHtml(frame.rawPayload || '')}</pre>
     </div>
   `;
+
+  const container = document.getElementById('jsonEditorContainer');
+  let editedBody = frame.body;
+
+  currentJsonEditor = new JsonEditor(container, {
+    initialValue: frame.body,
+    onChange: (newValue) => {
+      editedBody = newValue;
+    }
+  });
+
+  // Handle Save Payload
+  const btnSavePayload = document.getElementById('btnSavePayload');
+  btnSavePayload.addEventListener('click', async () => {
+    try {
+      await updateFrame(frame.id, editedBody);
+      frame.body = editedBody;
+      alert('Payload saved successfully to database!');
+      currentFrames = await getSessionFrames(activeSessionId);
+      renderFrameTable();
+    } catch (err) {
+      alert('Failed to save payload: ' + err.message);
+    }
+  });
+
+  // Handle Single Frame Replay
+  const btnReplayFrame = document.getElementById('btnReplayFrame');
+  btnReplayFrame.addEventListener('click', async () => {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tabs || tabs.length === 0) {
+      alert('No active tab found to replay frame into');
+      return;
+    }
+
+    try {
+      const updatedFrame = { ...frame, body: editedBody };
+      const mode = frame.direction === 'RECEIVED' ? 'SERVER_MOCK' : 'CLIENT';
+      const res = await chrome.runtime.sendMessage({
+        type: 'REPLAY_SINGLE_FRAME',
+        tabId: tabs[0].id,
+        frame: updatedFrame,
+        mode: mode
+      });
+
+      if (res && res.success) {
+        alert(`Successfully replayed ${frame.stompCommand} frame!`);
+      } else {
+        alert('Replay failed: ' + (res ? res.error : 'Unknown error'));
+      }
+    } catch (err) {
+      alert('Replay exception: ' + err.message);
+    }
+  });
 }
 
 // Delete Active Session
