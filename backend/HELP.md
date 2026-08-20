@@ -24,3 +24,13 @@ While most of the inheritance is fine, it also inherits unwanted elements like `
 To prevent this, the project POM contains empty overrides for these elements.
 If you manually switch to a different parent and actually want the inheritance, you need to remove those overrides.
 
+### Docker Load
+  1. Load the Docker image from tar archive:
+    docker load -i stomp-interceptor-backend.tar
+  
+  2. Run the container:
+    docker run -d -p 8080:8080 --name stomp-interceptor stomp-interceptor-backend:latest
+  
+  3. Verify running status:
+    docker ps
+    curl http://localhost:8080
