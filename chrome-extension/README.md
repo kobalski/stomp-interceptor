@@ -3,7 +3,9 @@
 ## Overview
 This Chrome Extension (Manifest V3) intercepts STOMP protocol messages transmitted over WebSockets between web frontends and Spring Boot backends. It utilizes the **Chrome DevTools Protocol (`chrome.debugger` API)** to capture low-level raw WebSocket frames, parses STOMP commands, headers, and payloads, and stores recorded sessions inside **Dexie.js (IndexedDB)**.
 
-This extension is built for QA automation, intern testing, recording client/server interaction flows, and replaying recorded STOMP sequences.
+Built with **React 19**, **TypeScript**, and **Vite**, this extension is designed for QA testing, intern onboarding, recording client/server interaction flows, and replaying recorded STOMP sequences.
+
+> 📄 **Detailed Documentation**: See [PROJECT_STRUCTURE.md](./PROJECT_STRUCTURE.md) for full project architecture and component breakdowns in Turkish.
 
 ---
 
@@ -11,21 +13,54 @@ This extension is built for QA automation, intern testing, recording client/serv
 
 ```
 chrome-extension/
-├── manifest.json            # MV3 configuration with debugger & storage permissions
-├── background.js           # Service Worker managing chrome.debugger protocol & message dispatch
-├── db.js                   # Dexie.js database schema & session/frame repository methods
-├── stomp-parser.js         # STOMP 1.0/1.1/1.2 frame parser & serializer utility
-├── lib/
-│   └── dexie.min.js        # Dexie.js IndexedDB wrapper library
-├── popup/
-│   ├── popup.html          # Extension popup UI (Quick recording toggle & live stream)
-│   ├── popup.css           # Styling for popup UI
-│   └── popup.js            # Popup controller logic
-└── dashboard/
-    ├── dashboard.html      # Full-page session inspector & Dexie DB viewer
-    ├── dashboard.css       # Styling for inspector dashboard
-    └── dashboard.js        # Inspector logic, search filters, import/export
+├── dist/                    # Compiled extension bundle (Load this in chrome://extensions)
+├── manifest.json            # Manifest V3 configuration with debugger & storage permissions
+├── vite.config.js           # Vite + CRXJS plugin build configuration
+├── tsconfig.json            # TypeScript compiler configuration (strict mode)
+├── package.json             # React 19, TypeScript, Dexie.js dependencies & scripts
+└── src/                     # React + TypeScript Source Files
+    ├── types/
+    │   └── index.ts         # StompFrame, Session, FrameRecord & message models
+    ├── lib/
+    │   ├── stomp-parser.ts  # STOMP 1.0/1.1/1.2 frame parser & serializer
+    │   └── db.ts            # Dexie.js database schema & repository methods
+    ├── background/
+    │   └── index.ts         # Chrome Service Worker managing debugger protocol & replay
+    ├── components/          # Reusable React UI Components
+    │   ├── DirectionTag.tsx # SENT / RECEIVED tag badge
+    │   ├── StatusPill.tsx   # Pulse recording indicator
+    │   ├── SessionCard.tsx  # Session list item card
+    │   ├── FrameTable.tsx   # STOMP frame table & filters
+    │   ├── FrameInspector.tsx # Header & payload inspector panel
+    │   └── JsonEditor.tsx   # Interactive JSON code & tree editor
+    ├── popup/               # Extension Toolbar Popup UI (React + TSX)
+    └── dashboard/           # Full-page Dashboard UI (React + TSX)
 ```
+
+---
+
+## 🚀 Build & Installation Guide
+
+1. **Install Dependencies**:
+   ```bash
+   npm install
+   ```
+
+2. **Build Production Bundle**:
+   ```bash
+   npm run build
+   ```
+
+3. **Auto-Rebuild on File Changes (Development)**:
+   ```bash
+   npm run watch
+   ```
+
+4. **Load into Chrome**:
+   - Open Chrome and navigate to `chrome://extensions/`.
+   - Enable **Developer mode** (toggle in top-right corner).
+   - Click **Load unpacked** and select the **`dist`** directory:
+     `chrome-extension/dist`
 
 ---
 
@@ -33,20 +68,20 @@ chrome-extension/
 
 Standard Chrome Extensions cannot inspect raw WebSocket frames using standard Web Request APIs. This extension uses Chrome's **DevTools Protocol (`chrome.debugger`)**:
 
-1. **Attach Debugger**: When user clicks **Start Recording** on a browser tab, `background.js` executes:
-   ```js
+1. **Attach Debugger**: When user clicks **Start Recording** on a browser tab, `background/index.ts` executes:
+   ```ts
    await chrome.debugger.attach({ tabId }, "1.3");
    await chrome.debugger.sendCommand({ tabId }, "Network.enable");
    ```
-2. **Listen to Frame Events**: `background.js` listens to `chrome.debugger.onEvent`:
+2. **Listen to Frame Events**: `background/index.ts` listens to `chrome.debugger.onEvent`:
    - `Network.webSocketFrameSent`: Triggered when client sends a WS frame.
    - `Network.webSocketFrameReceived`: Triggered when server pushes a WS frame.
-3. **Parse STOMP Payload**: `stomp-parser.js` extracts command (`CONNECT`, `SUBSCRIBE`, `SEND`, `MESSAGE`), headers (`destination`, `content-type`), and JSON/Text body.
-4. **Store in Dexie DB**: Each parsed frame is stored under the active `sessionId`.
+3. **Parse STOMP Payload**: `stomp-parser.ts` extracts command (`CONNECT`, `SUBSCRIBE`, `SEND`, `MESSAGE`), headers (`destination`, `content-type`), and JSON/Text body.
+4. **Store in Dexie DB**: Each parsed frame is stored in IndexedDB under the active `sessionId`.
 
 ---
 
-## 💾 Dexie DB Schema (`db.js`)
+## 💾 Dexie DB Schema (`db.ts`)
 
 IndexedDB database name: **`StompInterceptorDB`**
 
@@ -77,46 +112,11 @@ The extension provides two flexible replay strategies:
 
 ### 1. Server Mock Mode (`SERVER_MOCK`)
 Replays recorded `RECEIVED` server messages back into the target browser tab without needing a live backend!
-- Uses DevTools Protocol injection:
-  ```js
-  await chrome.debugger.sendCommand({ tabId }, "Network.webSocketFrameReceived", {
-    requestId: 'replay-req-1',
-    timestamp: Date.now() / 1000,
-    response: {
-      opcode: 1, // Text frame
-      mask: false,
-      payloadData: frame.rawPayload
-    }
-  });
-  ```
+- Triggers websocket message event on page client via `chrome.scripting.executeScript`.
 
 ### 2. Client Flow Replay (`CLIENT`)
 Re-sends recorded `SENT` client frames back to the live Spring Boot STOMP broker via the browser tab's active STOMP client:
 - Script injection via `chrome.scripting.executeScript`:
-  ```js
-  window.client.send(frame.destination, {}, frame.body);
+  ```ts
+  window.client.send(frame.destination, headers, frame.body);
   ```
-
----
-
-## 🚀 How to Load and Test in Chrome
-
-1. Open Chrome and navigate to `chrome://extensions/`.
-2. Enable **Developer mode** (toggle in upper-right corner).
-3. Click **Load unpacked** and select the directory:
-   `/home/kobalski/Development/stomp-interceptor/chrome-extension/`
-4. Start your Spring Boot Backend (`http://localhost:8080`).
-5. Open the Web Application at `http://localhost:8080`.
-6. Click the **STOMP Interceptor** Extension icon in Chrome's extension bar.
-7. Click **● Start Recording**.
-8. In the web app, click **Connect**, subscribe to topics, and send STOMP frames.
-9. Click **■ Stop Recording** in the Extension Popup.
-10. Click **Full Dashboard** to inspect all recorded frames in Dexie DB or click **Export JSON**!
-
----
-
-## 👩‍💻 Intern Developer Notes: Modifying & Extending
-
-- **Custom Frame Filters**: Modify `stomp-parser.js` to parse custom STOMP headers or handle binary STOMP frames (`content-type: application/octet-stream`).
-- **Automated Test Assertions**: Extend `dashboard.js` to add automated JSON schema validation for replayed STOMP frames.
-- **Export Formats**: `db.js` exports standard JSON format, which can easily be converted to Postman WS collections or HAR files.

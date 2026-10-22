@@ -1,4 +1,4 @@
-import { getSessions, exportSessionJSON } from '../db.js';
+import { getSessions, exportSessionJSON, getSessionsFrame } from '../db.js';
 
 let currentTabId = null;
 let isRecording = false;
@@ -11,7 +11,7 @@ const sessionNameGroup = document.getElementById('sessionNameGroup');
 const frameCount = document.getElementById('frameCount');
 const liveFeed = document.getElementById('liveFeed');
 const sessionSelect = document.getElementById('sessionSelect');
-const replayMode = document.getElementById('replayMode');
+
 const btnReplay = document.getElementById('btnReplay');
 const btnOpenDashboard = document.getElementById('btnOpenDashboard');
 const btnExportJSON = document.getElementById('btnExportJSON');
@@ -24,6 +24,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     await checkRecordingStatus();
   }
   await loadSessionsDropdown();
+
+  // Check if a replay is already running (persists even if popup was closed)
+  const replayStatus = await chrome.runtime.sendMessage({ type: 'GET_REPLAY_STATUS' });
+  if (replayStatus && replayStatus.isReplayInProgress) {
+    btnReplay.disabled = true;
+    btnReplay.textContent = 'Replaying...';
+  }
 });
 
 async function checkRecordingStatus() {
@@ -32,9 +39,25 @@ async function checkRecordingStatus() {
     tabId: currentTabId
   });
 
-  if (response && response.isRecording) {
+  if (response && response.isRecording && response.sessionId) {
     setRecordingUI(true, response.sessionId);
-  } else {
+    const frame = await getSessionsFrame(response.sessionId);
+    if (frames && frames.length > 0){
+      frameCount.textContent = String(frames.length);
+      liveFeed.innerHTML = '';
+      const recent = frames.slice(-20).reverse();
+      for(const f of recent){
+        const badge = document.createElement('div');
+        badge.className = `frame-badge ${f.direction.toLowerCase()}`;
+        badge.innerHTML = `
+          <span><strong>${f.direction}</strong> ${f.stompCommand}</span>
+          <span style="color:var(--text-muted);">${f.destination || ''}</span>
+        `;
+        liveFeed.appendChild(badge);
+      }
+    }
+  } 
+  else {
     setRecordingUI(false, null);
   }
 }
@@ -141,34 +164,57 @@ async function loadSessionsDropdown() {
 }
 
 // Replay Button
+let isReplaying = false; // Kept only as local guard for double-click within same popup session
+
 btnReplay.addEventListener('click', async () => {
   const sessionId = parseInt(sessionSelect.value, 10);
-  const mode = replayMode.value;
 
   if (!sessionId || !currentTabId) return;
+  if (isReplaying) return;
 
+  isReplaying = true;
   btnReplay.disabled = true;
   btnReplay.textContent = 'Replaying...';
 
   try {
+    // Fire replay — background runs it async, REPLAY_COMPLETE will signal when done
     const res = await chrome.runtime.sendMessage({
       type: 'REPLAY_SESSION',
       tabId: currentTabId,
       sessionId: sessionId,
-      mode: mode,
+      mode: 'CLIENT',
       delayMs: 400
     });
 
-    if (res && res.success) {
-      alert(`Successfully replayed ${res.frameCount} STOMP frames!`);
-    } else {
+    if (!res || !res.success) {
+      // Failed before even starting (e.g. another replay is already running) — reset immediately
       alert('Replay error: ' + (res ? res.error : 'Unknown error'));
+      isReplaying = false;
+      btnReplay.disabled = false;
+      btnReplay.textContent = '► Replay Session';
     }
+    // If success: do NOT alert yet — wait for REPLAY_COMPLETE message below
   } catch (err) {
     alert('Replay exception: ' + err.message);
-  } finally {
+    isReplaying = false;
     btnReplay.disabled = false;
     btnReplay.textContent = '► Replay Session';
+  }
+});
+
+// Listen to replay completion broadcast from background
+// This fires even if popup was closed and reopened during replay
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type === 'REPLAY_COMPLETE') {
+    isReplaying = false;
+    btnReplay.disabled = false;
+    btnReplay.textContent = '► Replay Session';
+
+    if (msg.success) {
+      alert(`✅ Replay complete! ${msg.replayedFrames} frame(s) successfully replayed.`);
+    } else {
+      alert(`⚠️ Replay finished with errors.\nSuccessful: ${msg.replayedFrames}, Failed: ${msg.errorCount}`);
+    }
   }
 });
 

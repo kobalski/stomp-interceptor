@@ -2,8 +2,10 @@ import { getSessions, getSessionFrames, deleteSession, importSessionJSON, update
 import { JsonEditor } from '../components/json-editor.js';
 
 let activeSessionId = null;
+let activeSessionObj = null;  // Stores full session object including tabUrl
 let currentFrames = [];
 let selectedFrameId = null;
+let checkedFrameIds = new Set(); // Tracks checkbox-selected frame IDs
 
 const sessionList = document.getElementById('sessionList');
 const currentSessionTitle = document.getElementById('currentSessionTitle');
@@ -14,6 +16,8 @@ const inspectorContent = document.getElementById('inspectorContent');
 const btnDeleteSession = document.getElementById('btnDeleteSession');
 const btnImport = document.getElementById('btnImport');
 const importFileInput = document.getElementById('importFileInput');
+const btnReplaySelected = document.getElementById('btnReplaySelected');
+const selectAllFrames = document.getElementById('selectAllFrames');
 
 document.addEventListener('DOMContentLoaded', async () => {
   await renderSessionsList();
@@ -59,12 +63,15 @@ async function renderSessionsList() {
 // Select Session
 async function selectSession(sessionId, sessionObj) {
   activeSessionId = sessionId;
+  activeSessionObj = sessionObj;  // Keep reference for replay tab matching
   selectedFrameId = null;
+  checkedFrameIds.clear();
+  updateReplaySelectedBtn();
 
   // Highlight active session card
   const cards = sessionList.querySelectorAll('.session-card');
   cards.forEach(c => c.classList.remove('active'));
-  
+
   await renderSessionsListUIOnly();
 
   currentSessionTitle.textContent = `#${sessionId} - ${sessionObj.name}`;
@@ -93,13 +100,19 @@ function renderFrameTable() {
 
   const filtered = currentFrames.filter(f => {
     if (!filter) return true;
-    return (f.stompCommand && f.stompCommand.toLowerCase().includes(filter)) ||
-           (f.destination && f.destination.toLowerCase().includes(filter)) ||
-           (f.body && f.body.toLowerCase().includes(filter));
+    // Filter only by destination
+    return (f.destination && f.destination.toLowerCase().includes(filter));
   });
 
+  // Sync select-all checkbox state
+  if (selectAllFrames) {
+    const allChecked = filtered.length > 0 && filtered.every(f => checkedFrameIds.has(f.id));
+    selectAllFrames.checked = allChecked;
+    selectAllFrames.indeterminate = !allChecked && filtered.some(f => checkedFrameIds.has(f.id));
+  }
+
   if (filtered.length === 0) {
-    frameTableBody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">No matching frames found</td></tr>`;
+    frameTableBody.innerHTML = `<tr><td colspan="7" style="text-align:center; color:var(--text-muted);">No matching frames found</td></tr>`;
     return;
   }
 
@@ -108,8 +121,34 @@ function renderFrameTable() {
     if (f.id === selectedFrameId) tr.className = 'selected';
     const timeStr = new Date(f.timestamp).toLocaleTimeString();
     const size = (f.body || '').length;
+    const isChecked = checkedFrameIds.has(f.id);
 
-    tr.innerHTML = `
+    // Checkbox cell
+    const tdCheck = document.createElement('td');
+    tdCheck.style.width = '36px';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.className = 'frame-checkbox';
+    checkbox.checked = isChecked;
+    checkbox.addEventListener('change', (e) => {
+      e.stopPropagation();
+      if (checkbox.checked) {
+        checkedFrameIds.add(f.id);
+      } else {
+        checkedFrameIds.delete(f.id);
+      }
+      updateReplaySelectedBtn();
+      // Sync select-all
+      const allBoxes = frameTableBody.querySelectorAll('.frame-checkbox');
+      const allChecked2 = allBoxes.length > 0 && [...allBoxes].every(cb => cb.checked);
+      selectAllFrames.checked = allChecked2;
+      selectAllFrames.indeterminate = !allChecked2 && [...allBoxes].some(cb => cb.checked);
+    });
+    tdCheck.appendChild(checkbox);
+    tr.appendChild(tdCheck);
+
+    // Remaining cells via innerHTML
+    const dataHtml = `
       <td>${index + 1}</td>
       <td>${timeStr}</td>
       <td><span class="tag ${f.direction.toLowerCase()}">${f.direction}</span></td>
@@ -117,8 +156,13 @@ function renderFrameTable() {
       <td style="color:var(--accent-cyan); font-family:var(--font-mono);">${f.destination || '-'}</td>
       <td>${size} B</td>
     `;
+    const temp = document.createElement('tbody');
+    temp.innerHTML = `<tr>${dataHtml}</tr>`;
+    const dataCells = temp.querySelector('tr').querySelectorAll('td');
+    dataCells.forEach(cell => tr.appendChild(cell));
 
-    tr.addEventListener('click', () => {
+    tr.addEventListener('click', (e) => {
+      if (e.target === checkbox || e.target === tdCheck) return;
       frameTableBody.querySelectorAll('tr').forEach(r => r.classList.remove('selected'));
       tr.classList.add('selected');
       selectedFrameId = f.id;
@@ -129,9 +173,103 @@ function renderFrameTable() {
   });
 }
 
+function updateReplaySelectedBtn() {
+  btnReplaySelected.disabled = checkedFrameIds.size === 0;
+}
+
 // Search Filter Input
 frameSearch.addEventListener('input', () => {
   renderFrameTable();
+});
+
+// Select All Frames toggle
+selectAllFrames.addEventListener('change', () => {
+  const filter = frameSearch.value.trim().toLowerCase();
+  const filtered = currentFrames.filter(f =>
+    !filter || (f.destination && f.destination.toLowerCase().includes(filter))
+  );
+  if (selectAllFrames.checked) {
+    filtered.forEach(f => checkedFrameIds.add(f.id));
+  } else {
+    filtered.forEach(f => checkedFrameIds.delete(f.id));
+  }
+  updateReplaySelectedBtn();
+  renderFrameTable();
+});
+
+// Replay Selected Frames (with timing)
+btnReplaySelected.addEventListener('click', async () => {
+  if (checkedFrameIds.size === 0) return;
+
+  // Resolve target tab
+  const allTabs = await chrome.tabs.query({});
+  const webTabs = allTabs.filter(t =>
+    t.url &&
+    !t.url.startsWith('chrome-extension://') &&
+    !t.url.startsWith('chrome://') &&
+    !t.url.startsWith('about:')
+  );
+
+  let targetTab = null;
+  if (activeSessionObj && activeSessionObj.tabUrl) {
+    try {
+      const sessionOrigin = new URL(activeSessionObj.tabUrl).origin;
+      targetTab = webTabs.find(t => {
+        try { return new URL(t.url).origin === sessionOrigin; }
+        catch { return false; }
+      });
+    } catch (_) { }
+  }
+  if (!targetTab) targetTab = webTabs[0];
+
+  if (!targetTab) {
+    alert('No suitable web page tab found.\n\nOpen the test page in another tab, connect to STOMP, then retry.');
+    return;
+  }
+
+  // Collect selected frames sorted by original timestamp
+  const filter = frameSearch.value.trim().toLowerCase();
+  const filtered = currentFrames.filter(f =>
+    !filter || (f.destination && f.destination.toLowerCase().includes(filter))
+  );
+  const selected = filtered
+    .filter(f => checkedFrameIds.has(f.id))
+    .sort((a, b) => a.timestamp - b.timestamp);
+
+  if (selected.length === 0) return;
+
+  btnReplaySelected.disabled = true;
+  btnReplaySelected.textContent = `⏳ Replaying 0/${selected.length}…`;
+
+  let prevTimestamp = selected[0].timestamp;
+
+  for (let i = 0; i < selected.length; i++) {
+    const f = selected[i];
+    const delay = i === 0 ? 0 : (f.timestamp - prevTimestamp);
+    prevTimestamp = f.timestamp;
+
+    if (delay > 0) {
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+
+    const mode = f.direction === 'RECEIVED' ? 'SERVER_MOCK' : 'CLIENT';
+    try {
+      await chrome.runtime.sendMessage({
+        type: 'REPLAY_SINGLE_FRAME',
+        tabId: targetTab.id,
+        frame: f,
+        mode: mode
+      });
+    } catch (err) {
+      console.error('Replay error for frame', f.id, err);
+    }
+
+    btnReplaySelected.textContent = `⏳ Replaying ${i + 1}/${selected.length}…`;
+  }
+
+  btnReplaySelected.textContent = '▶ Replay Selected';
+  btnReplaySelected.disabled = checkedFrameIds.size === 0;
+  alert(`Replayed ${selected.length} frame(s) with original timing.`);
 });
 
 // Inspect Frame Details
@@ -205,9 +343,35 @@ function inspectFrame(frame) {
   // Handle Single Frame Replay
   const btnReplayFrame = document.getElementById('btnReplayFrame');
   btnReplayFrame.addEventListener('click', async () => {
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tabs || tabs.length === 0) {
-      alert('No active tab found to replay frame into');
+    // Try to find the tab where the session was originally recorded (match by origin)
+    const allTabs = await chrome.tabs.query({});
+    const webTabs = allTabs.filter(t =>
+      t.url &&
+      !t.url.startsWith('chrome-extension://') &&
+      !t.url.startsWith('chrome://') &&
+      !t.url.startsWith('about:')
+    );
+
+    let targetTab = null;
+
+    // 1. Try to match session's recorded tabUrl by origin (e.g. http://localhost:8080)
+    if (activeSessionObj && activeSessionObj.tabUrl) {
+      try {
+        const sessionOrigin = new URL(activeSessionObj.tabUrl).origin;
+        targetTab = webTabs.find(t => {
+          try { return new URL(t.url).origin === sessionOrigin; }
+          catch { return false; }
+        });
+      } catch (_) { }
+    }
+
+    // 2. Fallback: use the first available web tab
+    if (!targetTab) {
+      targetTab = webTabs[0];
+    }
+
+    if (!targetTab) {
+      alert('No suitable web page tab found.\n\nOpen the test page (e.g. http://localhost:8080) in another tab, connect to STOMP, then retry.');
       return;
     }
 
@@ -216,13 +380,13 @@ function inspectFrame(frame) {
       const mode = frame.direction === 'RECEIVED' ? 'SERVER_MOCK' : 'CLIENT';
       const res = await chrome.runtime.sendMessage({
         type: 'REPLAY_SINGLE_FRAME',
-        tabId: tabs[0].id,
+        tabId: targetTab.id,
         frame: updatedFrame,
         mode: mode
       });
 
       if (res && res.success) {
-        alert(`Successfully replayed ${frame.stompCommand} frame!`);
+        alert(`Successfully replayed ${frame.stompCommand} frame to tab: ${targetTab.url}`);
       } else {
         alert('Replay failed: ' + (res ? res.error : 'Unknown error'));
       }
@@ -230,6 +394,7 @@ function inspectFrame(frame) {
       alert('Replay exception: ' + err.message);
     }
   });
+
 }
 
 // Delete Active Session
@@ -268,6 +433,6 @@ importFileInput.addEventListener('change', async (e) => {
 function escapeHtml(str) {
   if (!str) return '';
   return String(str).replace(/&/g, "&amp;")
-                     .replace(/</g, "&lt;")
-                     .replace(/>/g, "&gt;");
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }

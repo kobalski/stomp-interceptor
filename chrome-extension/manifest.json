@@ -17,15 +17,15 @@
     "wss://*/*"
   ],
   "background": {
-    "service_worker": "background.js",
+    "service_worker": "src/background/index.ts",
     "type": "module"
   },
   "action": {
-    "default_popup": "popup/popup.html",
+    "default_popup": "src/popup/index.html",
     "default_title": "STOMP Interceptor"
   },
   "options_ui": {
-    "page": "dashboard/dashboard.html",
+    "page": "src/dashboard/index.html",
     "open_in_tab": true
   }
 }

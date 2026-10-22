@@ -34,7 +34,8 @@
         </div>
 
         <div style="display:flex; gap:0.5rem; align-items:center;">
-          <input type="text" id="frameSearch" class="search-input" placeholder="Filter destination or command...">
+          <input type="text" id="frameSearch" class="search-input" placeholder="Filter by destination...">
+          <button id="btnReplaySelected" class="btn btn-cyan" style="padding:0.5rem 0.8rem; font-size:0.8rem;" disabled>▶ Replay Selected</button>
           <button id="btnDeleteSession" class="btn btn-red" style="padding:0.5rem 0.8rem; font-size:0.8rem;">Delete</button>
         </div>
       </div>
@@ -43,6 +44,7 @@
         <table>
           <thead>
             <tr>
+              <th style="width:36px;"><input type="checkbox" id="selectAllFrames" title="Select all"></th>
               <th>#</th>
               <th>Time</th>
               <th>Dir</th>
