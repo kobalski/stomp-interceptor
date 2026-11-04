@@ -8,6 +8,7 @@ interface FrameInspectorProps {
   onSavePayload: (frameId: number, newBody: string) => Promise<void>;
   onReplayFrame: (frame: FrameRecord) => Promise<void>;
   onDeleteFrame?: (frameId: number) => Promise<void>;
+  style?: React.CSSProperties;
 }
 
 export default function FrameInspector({
@@ -15,6 +16,7 @@ export default function FrameInspector({
   onSavePayload,
   onReplayFrame,
   onDeleteFrame,
+  style,
 }: FrameInspectorProps) {
   const [editedBody, setEditedBody] = useState(frame ? frame.body : '');
   const editorKeyRef = useRef(0);
@@ -48,7 +50,7 @@ export default function FrameInspector({
 
   if (!frame) {
     return (
-      <div className="inspector">
+      <div className="inspector" style={style}>
         <div className="inspector-title">Frame Inspector</div>
         <div style={{ color: 'var(--text-muted)', textAlign: 'center', padding: '2rem', fontSize: '0.85rem' }}>
           Select a frame from the table to inspect headers &amp; payload
@@ -60,7 +62,7 @@ export default function FrameInspector({
   const headersJson = JSON.stringify(frame.headers || {}, null, 2);
 
   return (
-    <div className="inspector">
+    <div className="inspector" style={style}>
       <div className="inspector-title">
         <span>Frame Inspector</span>
         {onDeleteFrame && (

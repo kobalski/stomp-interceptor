@@ -42,20 +42,20 @@ export default function FrameTable({
         <table>
           <thead>
             <tr>
-              <th style={{ width: '36px' }}>
+              <th className="th-checkbox">
                 <input type="checkbox" disabled />
               </th>
-              <th>#</th>
-              <th>Time</th>
-              <th>Dir</th>
-              <th>Command</th>
-              <th>Destination</th>
-              <th>Size</th>
+              <th className="th-index">#</th>
+              <th className="th-time">Time</th>
+              <th className="th-dir">Dir</th>
+              <th className="th-cmd">Command</th>
+              <th className="th-dest">Destination</th>
+              <th className="th-size">Size</th>
             </tr>
           </thead>
           <tbody>
             <tr>
-              <td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
+              <td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '2.5rem 1rem' }}>
                 No matching frames found
               </td>
             </tr>
@@ -70,7 +70,7 @@ export default function FrameTable({
       <table>
         <thead>
           <tr>
-            <th style={{ width: '36px' }}>
+            <th className="th-checkbox">
               <input
                 type="checkbox"
                 id="selectAllFrames"
@@ -81,12 +81,12 @@ export default function FrameTable({
                 onChange={handleSelectAllChange}
               />
             </th>
-            <th>#</th>
-            <th>Time</th>
-            <th>Dir</th>
-            <th>Command</th>
-            <th>Destination</th>
-            <th>Size</th>
+            <th className="th-index">#</th>
+            <th className="th-time">Time</th>
+            <th className="th-dir">Dir</th>
+            <th className="th-cmd">Command</th>
+            <th className="th-dest">Destination</th>
+            <th className="th-size">Size</th>
           </tr>
         </thead>
         <tbody>
@@ -106,7 +106,7 @@ export default function FrameTable({
                   onFrameSelect(f);
                 }}
               >
-                <td style={{ width: '36px' }}>
+                <td className="td-checkbox">
                   <input
                     type="checkbox"
                     className="frame-checkbox"
@@ -119,14 +119,14 @@ export default function FrameTable({
                     }}
                   />
                 </td>
-                <td>{index + 1}</td>
-                <td>{timeStr}</td>
-                <td><DirectionTag direction={f.direction} /></td>
-                <td style={{ fontWeight: 600, fontFamily: 'var(--font-mono)' }}>{f.stompCommand}</td>
-                <td style={{ color: 'var(--accent-cyan)', fontFamily: 'var(--font-mono)' }}>
+                <td className="td-index">{index + 1}</td>
+                <td className="td-time">{timeStr}</td>
+                <td className="td-dir"><DirectionTag direction={f.direction} /></td>
+                <td className="td-cmd">{f.stompCommand}</td>
+                <td className="td-dest" title={f.destination || '-'}>
                   {f.destination || '-'}
                 </td>
-                <td>{size} B</td>
+                <td className="td-size">{size} B</td>
               </tr>
             );
           })}

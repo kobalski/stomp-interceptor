@@ -15,6 +15,13 @@ import FrameInspector from '../components/FrameInspector';
 import ToastContainer, { ToastMessage } from '../components/Toast';
 import { Session, FrameRecord, ReplayMode } from '../types';
 
+const MIN_SIDEBAR = 180;
+const MAX_SIDEBAR = 600;
+const MIN_INSPECTOR = 250;
+const MAX_INSPECTOR = 800;
+const MIN_MIDDLE = 260;
+const RESIZER_WIDTH = 6;
+
 export default function Dashboard() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<number | null>(null);
@@ -26,6 +33,31 @@ export default function Dashboard() {
   const [replayBtnText, setReplayBtnText] = useState('▶ Replay Selected');
   const [isReplayingSelected, setIsReplayingSelected] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [activeResizer, setActiveResizer] = useState<'left' | 'right' | null>(null);
+
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('stomp_sidebar_width');
+      if (saved) {
+        const val = parseInt(saved, 10);
+        if (!isNaN(val) && val >= MIN_SIDEBAR && val <= MAX_SIDEBAR) return val;
+      }
+    } catch (_) {}
+    return 280;
+  });
+
+  const [inspectorWidth, setInspectorWidth] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('stomp_inspector_width');
+      if (saved) {
+        const val = parseInt(saved, 10);
+        if (!isNaN(val) && val >= MIN_INSPECTOR && val <= MAX_INSPECTOR) return val;
+      }
+    } catch (_) {}
+    return 420;
+  });
 
   const importFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -40,6 +72,114 @@ export default function Dashboard() {
   const dismissToast = useCallback((id: number) => {
     setToasts(prev => prev.filter(t => t.id !== id));
   }, []);
+
+  const handleLeftPointerDown = useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    setActiveResizer('left');
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      if (moveEvent.buttons === 0) {
+        handlePointerUp();
+        return;
+      }
+      if (!containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const mouseX = moveEvent.clientX - rect.left;
+      const maxSidebar = rect.width - inspectorWidth - (2 * RESIZER_WIDTH) - MIN_MIDDLE;
+      const newWidth = Math.max(MIN_SIDEBAR, Math.min(Math.min(MAX_SIDEBAR, maxSidebar), mouseX));
+      setSidebarWidth(Math.round(newWidth));
+    };
+
+    const handlePointerUp = () => {
+      setActiveResizer(null);
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerUp);
+  }, [inspectorWidth]);
+
+  const handleRightPointerDown = useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    setActiveResizer('right');
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      if (moveEvent.buttons === 0) {
+        handlePointerUp();
+        return;
+      }
+      if (!containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const mouseFromRight = rect.right - moveEvent.clientX;
+      const maxInspector = rect.width - sidebarWidth - (2 * RESIZER_WIDTH) - MIN_MIDDLE;
+      const newWidth = Math.max(MIN_INSPECTOR, Math.min(Math.min(MAX_INSPECTOR, maxInspector), mouseFromRight));
+      setInspectorWidth(Math.round(newWidth));
+    };
+
+    const handlePointerUp = () => {
+      setActiveResizer(null);
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerUp);
+  }, [sidebarWidth]);
+
+  const handleResetSidebar = useCallback(() => {
+    setSidebarWidth(280);
+  }, []);
+
+  const handleResetInspector = useCallback(() => {
+    setInspectorWidth(420);
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('stomp_sidebar_width', sidebarWidth.toString());
+    } catch (_) {}
+  }, [sidebarWidth]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('stomp_inspector_width', inspectorWidth.toString());
+    } catch (_) {}
+  }, [inspectorWidth]);
+
+  useEffect(() => {
+    if (activeResizer) {
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    } else {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    }
+    return () => {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [activeResizer]);
+
+  useEffect(() => {
+    const handleResize = () => {
+      if (!containerRef.current) return;
+      const totalWidth = containerRef.current.clientWidth;
+      const available = totalWidth - (2 * RESIZER_WIDTH) - MIN_MIDDLE;
+      if (sidebarWidth + inspectorWidth > available && available > 0) {
+        const ratio = available / (sidebarWidth + inspectorWidth);
+        setSidebarWidth(prev => Math.max(MIN_SIDEBAR, Math.floor(prev * ratio)));
+        setInspectorWidth(prev => Math.max(MIN_INSPECTOR, Math.floor(prev * ratio)));
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [sidebarWidth, inspectorWidth]);
 
   const selectSession = useCallback(async (sessionObj: Session) => {
     if (sessionObj.id === undefined) return;
@@ -353,10 +493,10 @@ export default function Dashboard() {
   const noSessions = sessions.length === 0;
 
   return (
-    <div className="dashboard-layout">
+    <div className="dashboard-layout" ref={containerRef}>
 
       {/* Sidebar: Recording Sessions */}
-      <div className="sidebar">
+      <div className="sidebar" style={{ width: `${sidebarWidth}px` }}>
         <div className="sidebar-header">
           <div className="sidebar-title">Recorded Sessions</div>
           <button
@@ -385,6 +525,14 @@ export default function Dashboard() {
           )}
         </div>
       </div>
+
+      {/* Resizer: Sidebar / Main View */}
+      <div
+        className={`resizer ${activeResizer === 'left' ? 'resizing' : ''}`}
+        onPointerDown={handleLeftPointerDown}
+        onDoubleClick={handleResetSidebar}
+        title="Drag to resize sidebar (Double-click to reset)"
+      />
 
       {/* Main View: STOMP Frame Feed */}
       <div className="main-view">
@@ -468,8 +616,17 @@ export default function Dashboard() {
         />
       </div>
 
+      {/* Resizer: Main View / Inspector */}
+      <div
+        className={`resizer ${activeResizer === 'right' ? 'resizing' : ''}`}
+        onPointerDown={handleRightPointerDown}
+        onDoubleClick={handleResetInspector}
+        title="Drag to resize inspector (Double-click to reset)"
+      />
+
       {/* Inspector Panel: Frame Detail */}
       <FrameInspector
+        style={{ width: `${inspectorWidth}px` }}
         frame={selectedFrame}
         onSavePayload={handleSavePayload}
         onReplayFrame={handleReplayFrame}
