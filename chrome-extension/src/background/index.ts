@@ -5,6 +5,7 @@ import {
   ExtensionBroadcastEvent,
   FrameDirection,
   FrameRecord,
+  ReplayDirectionFilter,
 } from '../types';
 
 interface ActiveRecording {
@@ -362,7 +363,7 @@ async function handleMessage(message: ExtensionRequestMessage, sender: chrome.ru
     }
 
     case 'REPLAY_SESSION': {
-      const { tabId, sessionId } = message;
+      const { tabId, sessionId, directionFilter } = message;
       if (!tabId || !sessionId) throw new Error('Tab ID and Session ID are required for replay');
 
       if (isReplayInProgress) {
@@ -375,7 +376,7 @@ async function handleMessage(message: ExtensionRequestMessage, sender: chrome.ru
       }
 
       isReplayInProgress = true;
-      executeReplaySequence(tabId, frames)
+      executeReplaySequence(tabId, frames, directionFilter)
         .finally(() => { isReplayInProgress = false; });
       return { success: true, frameCount: frames.length };
     }
@@ -427,13 +428,22 @@ export function parseTimestampToMs(val: any): number {
 async function executeReplaySequence(
   tabId: number,
   frames: FrameRecord[],
+  directionFilter?: ReplayDirectionFilter,
 ): Promise<any> {
   const replayableFrames = frames
     .filter(f => {
       const dir = (f.direction || '').toUpperCase();
+      if (directionFilter === 'SENT') return dir === 'SENT';
+      if (directionFilter === 'RECEIVED') return dir === 'RECEIVED';
       return dir === 'RECEIVED' || dir === 'SENT';
     })
     .sort((a, b) => parseTimestampToMs(a.timestamp) - parseTimestampToMs(b.timestamp));
+
+  const filterDesc = directionFilter === 'SENT'
+    ? 'user interaction (SENT)'
+    : directionFilter === 'RECEIVED'
+      ? 'server event (RECEIVED)'
+      : '';
 
   if (replayableFrames.length === 0) {
     broadcastMessage({
@@ -443,7 +453,7 @@ async function executeReplaySequence(
       totalFrames: 0,
       replayedFrames: 0,
       skippedFrames: frames.length,
-      message: `No frames to replay in this session`
+      message: `No ${filterDesc ? filterDesc + ' ' : ''}frames to replay in this session`
     });
     return;
   }
@@ -506,8 +516,8 @@ async function executeReplaySequence(
       replayedFrames: replayedCount,
       errorCount,
       message: errorCount === 0
-        ? `Successfully replayed ${replayedCount} frames`
-        : `Replayed ${replayedCount}/${replayableFrames.length} frames (${errorCount} errors)`
+        ? `Successfully replayed ${replayedCount} ${filterDesc ? filterDesc + ' ' : ''}frames`
+        : `Replayed ${replayedCount}/${replayableFrames.length} ${filterDesc ? filterDesc + ' ' : ''}frames (${errorCount} errors)`
     });
 
   } catch (err: any) {

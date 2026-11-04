@@ -33,6 +33,8 @@ export interface FrameRecord {
   rawPayload: string;
 }
 
+export type ReplayDirectionFilter = 'ALL' | 'SENT' | 'RECEIVED';
+
 export interface StartRecordingMessage {
   type: 'START_RECORDING';
   tabId: number;
@@ -57,6 +59,7 @@ export interface ReplaySessionMessage {
   type: 'REPLAY_SESSION';
   tabId: number;
   sessionId: number;
+  directionFilter?: ReplayDirectionFilter;
 }
 
 export interface ReplaySingleFrameMessage {

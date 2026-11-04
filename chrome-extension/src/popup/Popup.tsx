@@ -4,7 +4,7 @@ import StatusPill from '../components/StatusPill';
 import LiveFeedFrame from '../components/LiveFeedFrame';
 import SessionDropdown from '../components/SessionDropdown';
 import ToastContainer, { ToastMessage } from '../components/Toast';
-import { Session, FrameDirection, ReplayMode } from '../types';
+import { Session, FrameDirection, ReplayDirectionFilter } from '../types';
 
 const MAX_LIVE_FEED_FRAMES = 20;
 
@@ -24,6 +24,7 @@ export default function Popup() {
   const [liveFeedFrames, setLiveFeedFrames] = useState<LiveFrameItem[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState('');
+  const [replayFilter, setReplayFilter] = useState<ReplayDirectionFilter>('ALL');
   
   const [isReplaying, setIsReplaying] = useState(false);
   const [replayBtnText, setReplayBtnText] = useState('► Replay Session');
@@ -181,8 +182,7 @@ export default function Popup() {
         type: 'REPLAY_SESSION',
         tabId: currentTabId,
         sessionId: sessionId,
-        mode: 'CLIENT',
-        delayMs: 400
+        directionFilter: replayFilter,
       });
 
       if (!res || !res.success) {
@@ -197,7 +197,7 @@ export default function Popup() {
       setIsReplaying(false);
       setReplayBtnText('► Replay Session');
     }
-  }, [selectedSessionId, currentTabId, addToast]);
+  }, [selectedSessionId, currentTabId, replayFilter, addToast]);
 
   const handleExportJSON = useCallback(async () => {
     const sessionId = parseInt(selectedSessionId, 10);
@@ -295,6 +295,20 @@ export default function Popup() {
             value={selectedSessionId}
             onChange={setSelectedSessionId}
           />
+        </div>
+
+        <div className="form-group">
+          <label htmlFor="replayTargetSelect">Replay Target</label>
+          <select
+            id="replayTargetSelect"
+            value={replayFilter}
+            onChange={e => setReplayFilter(e.target.value as ReplayDirectionFilter)}
+            disabled={isReplaying}
+          >
+            <option value="ALL">All Messages (User &amp; Server)</option>
+            <option value="SENT">Play Only User Interactions (Sent)</option>
+            <option value="RECEIVED">Play Only Server Events (Received)</option>
+          </select>
         </div>
         
         <button

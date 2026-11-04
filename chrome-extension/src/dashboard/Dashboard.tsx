@@ -13,7 +13,7 @@ import SessionCard from '../components/SessionCard';
 import FrameTable from '../components/FrameTable';
 import FrameInspector from '../components/FrameInspector';
 import ToastContainer, { ToastMessage } from '../components/Toast';
-import { Session, FrameRecord, ReplayMode } from '../types';
+import { Session, FrameRecord, ReplayDirectionFilter } from '../types';
 
 const MIN_SIDEBAR = 180;
 const MAX_SIDEBAR = 600;
@@ -30,6 +30,7 @@ export default function Dashboard() {
   const [selectedFrameId, setSelectedFrameId] = useState<number | null>(null);
   const [checkedFrameIds, setCheckedFrameIds] = useState<Set<number>>(new Set());
   const [searchFilter, setSearchFilter] = useState('');
+  const [replayFilter, setReplayFilter] = useState<ReplayDirectionFilter>('ALL');
   const [replayBtnText, setReplayBtnText] = useState('▶ Replay Selected');
   const [isReplayingSelected, setIsReplayingSelected] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
@@ -392,8 +393,8 @@ export default function Dashboard() {
     }
   }, [activeSessionId, checkedFrameIds, selectedFrameId, addToast]);
 
-  const handleReplaySelected = useCallback(async () => {
-    if (checkedFrameIds.size === 0) return;
+  const handleReplayAction = useCallback(async () => {
+    if (!activeSessionId) return;
 
     const targetTab = await resolveTargetTab();
     if (!targetTab || !targetTab.id) {
@@ -402,7 +403,7 @@ export default function Dashboard() {
     }
 
     const filter = searchFilter.trim().toLowerCase();
-    const filtered = currentFrames.filter(f =>
+    const destinationFiltered = currentFrames.filter(f =>
       !filter || (f.destination && f.destination.toLowerCase().includes(filter))
     );
     const parseTs = (ts: any): number => {
@@ -418,19 +419,37 @@ export default function Dashboard() {
       return 0;
     };
 
-    const selected = filtered
-      .filter(f => f.id !== undefined && checkedFrameIds.has(f.id))
+    // If frames are checked, only replay checked frames; otherwise replay all frames in session
+    const pool = checkedFrameIds.size > 0
+      ? destinationFiltered.filter(f => f.id !== undefined && checkedFrameIds.has(f.id))
+      : destinationFiltered;
+
+    const framesToReplay = pool
+      .filter(f => {
+        const dir = (f.direction || '').toUpperCase();
+        if (replayFilter === 'SENT') return dir === 'SENT';
+        if (replayFilter === 'RECEIVED') return dir === 'RECEIVED';
+        return dir === 'SENT' || dir === 'RECEIVED';
+      })
       .sort((a, b) => parseTs(a.timestamp) - parseTs(b.timestamp));
 
-    if (selected.length === 0) return;
+    if (framesToReplay.length === 0) {
+      const modeText = replayFilter === 'SENT'
+        ? 'User Interactions (SENT)'
+        : replayFilter === 'RECEIVED'
+          ? 'Server Events (RECEIVED)'
+          : 'matching';
+      addToast(`No ${modeText} frames found to replay`, 'info');
+      return;
+    }
 
     setIsReplayingSelected(true);
-    setReplayBtnText(`⏳ Replaying 0/${selected.length}…`);
+    setReplayBtnText(`⏳ Replaying 0/${framesToReplay.length}…`);
 
-    let prevTimestamp = parseTs(selected[0].timestamp);
+    let prevTimestamp = parseTs(framesToReplay[0].timestamp);
 
-    for (let i = 0; i < selected.length; i++) {
-      const f = selected[i];
+    for (let i = 0; i < framesToReplay.length; i++) {
+      const f = framesToReplay[i];
       const currentTs = parseTs(f.timestamp);
       const delay = i === 0 ? 0 : (currentTs - prevTimestamp);
       prevTimestamp = currentTs;
@@ -443,20 +462,38 @@ export default function Dashboard() {
         await chrome.runtime.sendMessage({
           type: 'REPLAY_SINGLE_FRAME',
           tabId: targetTab.id,
-          frame: f,
-          mode: 'CLIENT'
+          frame: f
         });
       } catch (err) {
         console.error('Replay error for frame', f.id, err);
       }
 
-      setReplayBtnText(`⏳ Replaying ${i + 1}/${selected.length}…`);
+      setReplayBtnText(`⏳ Replaying ${i + 1}/${framesToReplay.length}…`);
     }
 
-    setReplayBtnText('▶ Replay Selected');
+    setReplayBtnText('▶ Replay');
     setIsReplayingSelected(false);
-    addToast(`Replayed ${selected.length} frame(s) successfully`, 'success');
-  }, [checkedFrameIds, searchFilter, currentFrames, activeSessionObj, addToast]);
+    const filterLabel = replayFilter === 'SENT'
+      ? 'user interaction'
+      : replayFilter === 'RECEIVED'
+        ? 'server event'
+        : '';
+    addToast(`Replayed ${framesToReplay.length} ${filterLabel ? filterLabel + ' ' : ''}frame(s) successfully`, 'success');
+  }, [checkedFrameIds, searchFilter, currentFrames, replayFilter, activeSessionId, resolveTargetTab, addToast]);
+
+  const replayButtonLabel = useMemo(() => {
+    if (isReplayingSelected) return replayBtnText;
+    const targetLabel = replayFilter === 'SENT'
+      ? 'User Interactions'
+      : replayFilter === 'RECEIVED'
+        ? 'Server Events'
+        : 'Frames';
+
+    if (checkedFrameIds.size > 0) {
+      return `▶ Replay Selected ${targetLabel} (${checkedFrameIds.size})`;
+    }
+    return `▶ Replay ${targetLabel}`;
+  }, [isReplayingSelected, replayBtnText, replayFilter, checkedFrameIds.size]);
 
   const handleDeleteSession = useCallback(async () => {
     if (!activeSessionId) return;
@@ -572,6 +609,18 @@ export default function Dashboard() {
               onChange={(e) => setSearchFilter(e.target.value)}
             />
 
+            {/* Replay Target Filter */}
+            <select
+              className="select-input"
+              value={replayFilter}
+              onChange={(e) => setReplayFilter(e.target.value as ReplayDirectionFilter)}
+              title="Select which messages to replay"
+            >
+              <option value="ALL">All Messages</option>
+              <option value="SENT">Play User Interactions (Sent)</option>
+              <option value="RECEIVED">Play Server Events (Received)</option>
+            </select>
+
             {/* Add New Frame */}
             <button
               className="btn btn-secondary"
@@ -583,14 +632,15 @@ export default function Dashboard() {
               ➕ Add Message
             </button>
 
-            {/* Replay Selected Frames */}
+            {/* Replay Frames */}
             <button
               className="btn btn-cyan"
               style={{ padding: '0.45rem 0.8rem', fontSize: '0.75rem' }}
-              disabled={checkedFrameIds.size === 0 || isReplayingSelected}
-              onClick={handleReplaySelected}
+              disabled={!activeSessionId || isReplayingSelected || currentFrames.length === 0}
+              onClick={handleReplayAction}
+              title={checkedFrameIds.size > 0 ? "Replay selected frames with current direction filter" : "Replay session frames with current direction filter"}
             >
-              {replayBtnText}
+              {replayButtonLabel}
             </button>
 
             {/* Delete Selected Frames (when frames are checked) */}
