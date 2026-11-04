@@ -49,7 +49,7 @@ export function parseStompFrames(rawPayload: string): StompFrame[] {
   return parsedList;
 }
 
-function extractStompMessages(rawFrame : string) {
+function extractStompMessages(rawFrame: string) { 
     // 1. Ignore SockJS connection and heartbeat frames
     if (rawFrame === 'o' || rawFrame === 'h') {
         return []; // Nothing to process

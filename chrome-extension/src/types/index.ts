@@ -33,8 +33,6 @@ export interface FrameRecord {
   rawPayload: string;
 }
 
-export type ReplayMode = 'CLIENT';
-
 export interface StartRecordingMessage {
   type: 'START_RECORDING';
   tabId: number;
@@ -59,15 +57,12 @@ export interface ReplaySessionMessage {
   type: 'REPLAY_SESSION';
   tabId: number;
   sessionId: number;
-  mode: ReplayMode;
-  delayMs?: number;
 }
 
 export interface ReplaySingleFrameMessage {
   type: 'REPLAY_SINGLE_FRAME';
   tabId: number;
   frame: FrameRecord;
-  mode?: ReplayMode;
 }
 
 export type ExtensionRequestMessage =

@@ -5,14 +5,49 @@ import {
   ExtensionBroadcastEvent,
   FrameDirection,
   FrameRecord,
-  ReplayMode
 } from '../types';
 
 interface ActiveRecording {
   sessionId: number;
   tabUrl: string;
   tabTitle: string;
+};
+
+interface TabState {
+  attached: boolean,
+  workerSession: string
 }
+
+export interface CdpRemoteObject<T = unknown> {
+  type: string;
+  subtype?: string;
+  className?: string;
+  value?: T;
+  objectId?: string;
+  description?: string;
+}
+
+export interface RuntimeEvaluateResult {
+  result: CdpRemoteObject;
+  exceptionDetails?: unknown;
+}
+
+export interface RuntimeQueryObjectsResult {
+  objects: CdpRemoteObject;
+}
+
+export interface RuntimeCallFunctionOnResult<T = unknown> {
+  result: CdpRemoteObject<T>;
+  exceptionDetails?: unknown;
+}
+
+export interface ReplayResult {
+  ok: boolean;
+  url?: string;
+  error?: string;
+}
+
+const tabState = new Map<number, TabState>();
 
 // Map tabId -> { sessionId, tabUrl, tabTitle }
 const activeRecordings = new Map<number, ActiveRecording>();
@@ -27,8 +62,33 @@ const activeTabSubscriptions = new Map<number, Map<string, string>>();
 const attachedTargets = new Map<string, number>();
 const workerSessions = new Map();
 
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  if (changeInfo.status === "loading" && tab.url?.includes("localhost")) {
+    let state = tabState.get(tabId);
+    if (state) return;
+
+    try {
+      await chrome.debugger.attach({ tabId }, "1.3");
+      await chrome.debugger.sendCommand({ tabId }, "Target.setAutoAttach", {
+        autoAttach: true,
+        waitForDebuggerOnStart: false,
+        flatten: true,
+        filter: [
+          { type: "worker", exclude: false },
+          { type: "service_worker", exclude: false },
+          { type: "shared_worker", exclude: false }
+        ]
+      });
+    } catch (err) {
+      console.warn("Debugger attach failed:", err);
+    }
+  }
+});
+
 // Listen to Chrome Debugger Events
 chrome.debugger.onEvent.addListener(async (source: chrome.debugger.Debuggee, method: string, params: any) => {
+  if (!source.tabId) return;
+
   if (method === "Target.attachedToTarget") { 
     const { sessionId, targetInfo } = params;
     const workerSession = {
@@ -43,25 +103,66 @@ chrome.debugger.onEvent.addListener(async (source: chrome.debugger.Debuggee, met
       targetId: targetInfo.targetId
     });
 
+    if (!targetInfo.url.includes("src/client/workers/ws-worker.worker.js?") && tabState.get(source.tabId)) { 
+      return;
+    }
+
     if (source.tabId) { 
       attachedTargets.set(targetInfo.targetId, source.tabId);
+      if (params.waitingForDebugger) { 
+        chrome.debugger.sendCommand(workerSession, "Runtime.runIfWaitingForDebugger")
+      }
       await chrome.debugger.sendCommand(workerSession, "Network.enable");
+      try {
+        await patchWebWorker(source.tabId, sessionId);
+      } catch (error) {
+        console.log(error);
+      }
     }
+ 
+    tabState.set(source.tabId, { attached: true, workerSession: sessionId });
     return;
   }
 
   if (method === "Target.detachedFromTarget") { 
     workerSessions.delete(params.sessionId);
+   const state = tabState.get(source.tabId);
+    if (!source.tabId && state?.workerSession === params.sessionId) { 
+      tabState.delete(source.tabId);
+    }
     return;
   }
 
   const tabId = source.tabId ? source.tabId : attachedTargets.get(source.targetId ?? "");
-  if (!tabId || !activeRecordings.has(tabId)) return;
+  if (!tabId) return;
+  
+  if (method === "Network.webSocketFrameSent") {
+      const payloadData: string = params?.response?.payloadData || '';
+
+      if (!payloadData) return;
+
+      // Parse STOMP frames (skip raw heartbeats if needed or log them)
+      const stompFrames = parseStompFrames(payloadData);
+
+      for (const frame of stompFrames) {
+        // Track SUBSCRIBE / UNSUBSCRIBE state from intercepted WS traffic
+      if (!activeTabSubscriptions.has(tabId)) activeTabSubscriptions.set(tabId, new Map());
+          const tabSubs = activeTabSubscriptions.get(tabId)!;
+          if (frame.command === 'SUBSCRIBE' && frame.destination) {
+            const subId = frame.headers?.id || `sub-tracked-${Date.now()}`;
+            tabSubs.set(frame.destination, subId);
+          } else if (frame.command === 'UNSUBSCRIBE' && frame.destination) {
+            tabSubs.delete(frame.destination);
+          }
+      }
+  }
+  
+  if (!activeRecordings.has(tabId)) return;
 
   const recording = activeRecordings.get(tabId)!;
   const sessionId = recording.sessionId;
 
- if (method === "Network.webSocketFrameSent" || method === "Network.webSocketFrameReceived"){
+ if (method === "Network.webSocketFrameSent" || method === "Network.webSocketFrameReceived") {
     const direction: FrameDirection = method === 'Network.webSocketFrameSent' ? 'SENT' : 'RECEIVED';
     const payloadData: string = params?.response?.payloadData || '';
 
@@ -69,22 +170,8 @@ chrome.debugger.onEvent.addListener(async (source: chrome.debugger.Debuggee, met
 
     // Parse STOMP frames (skip raw heartbeats if needed or log them)
     const stompFrames = parseStompFrames(payloadData);
-
     for (const frame of stompFrames) {
       await saveFrame(sessionId, direction, frame);
-
-      // Track SUBSCRIBE / UNSUBSCRIBE state from intercepted WS traffic
-      if (direction === 'SENT') {
-        if (!activeTabSubscriptions.has(tabId)) activeTabSubscriptions.set(tabId, new Map());
-        const tabSubs = activeTabSubscriptions.get(tabId)!;
-        if (frame.command === 'SUBSCRIBE' && frame.destination) {
-          const subId = frame.headers?.id || `sub-tracked-${Date.now()}`;
-          tabSubs.set(frame.destination, subId);
-        } else if (frame.command === 'UNSUBSCRIBE' && frame.destination) {
-          tabSubs.delete(frame.destination);
-        }
-      }
-
       // Notify extension popups/dashboards of live intercepted frame
       broadcastMessage({
         type: 'STOMP_FRAME_INTERCEPTED',
@@ -97,6 +184,106 @@ chrome.debugger.onEvent.addListener(async (source: chrome.debugger.Debuggee, met
   }
 });
 
+async function patchWebWorker(tabId: number, sessionId: string) {
+  const hookCode = `
+    if (!self.__TESTING_SOCKETS__) {
+      const OriginalWebSocket = self.WebSocket;
+      self.__TESTING_SOCKETS__ = [];
+
+      self.WebSocket = function(url, protocols) {
+        const ws = protocols !== undefined
+          ? new OriginalWebSocket(url, protocols)
+          : new OriginalWebSocket(url);
+
+        // Prevent fake ACK/NACK frames for replayed messages ("replay-...")
+        // from being sent to the real backend server, which would cause the
+        // broker to reject the unknown message-id and close the subscription.
+        const origSend = ws.send.bind(ws);
+        ws.send = function(data) {
+          if (typeof data === "string" && data.includes("replay-") && (data.includes("ACK\\n") || data.includes("NACK\\n"))) {
+            console.log("[Worker Replay] Suppressed outgoing ACK/NACK for replayed message:", data);
+            return;
+          }
+          return origSend(data);
+        };
+
+        self.__TESTING_SOCKETS__.push(ws);
+        return ws;
+      };
+      self.WebSocket.prototype = OriginalWebSocket.prototype;
+      Object.assign(self.WebSocket, OriginalWebSocket);
+    }
+
+    // Outgoing (Client -> Server): Sends a real network packet to backend
+    self.__sendTestMessage = function(message, index = 0) {
+      const openSockets = self.__TESTING_SOCKETS__.filter((s) => s && s.readyState === 1);
+      const socket = openSockets[openSockets.length - 1] || self.__TESTING_SOCKETS__[index];
+      if (socket && socket.readyState === 1) {
+        socket.send(message);
+        return "Sent from Worker!";
+      }
+      return "Worker socket not ready";
+    };
+
+    // Incoming Simulation (Server -> Client): Triggers JS handler directly inside Worker
+    self.__receiveTestMessage = function(sockJsFrame, index = 0) {
+      const openSockets = self.__TESTING_SOCKETS__.filter((s) => s && s.readyState === 1);
+      const socket = openSockets[openSockets.length - 1] || self.__TESTING_SOCKETS__[index];
+
+      if (socket && socket.readyState === 1) {
+        // 1. Unwrap if already in a["..."] so we can sanitize the inner STOMP frame
+        let innerStomp = sockJsFrame;
+        if (sockJsFrame.startsWith("a[")) {
+          try {
+            innerStomp = JSON.parse(sockJsFrame.slice(1))[0];
+          } catch {}
+        }
+
+        // 2. Remove any existing content-length header (a 1-byte mismatch leaves
+        // leftover bytes in STOMP's partialData buffer and breaks all future messages!)
+        // and guarantee the frame ends with EXACTLY ONE null byte (\\x00) and nothing after it.
+        const cleanStomp =
+          innerStomp
+            .replace(/^content-length:.*\\r?\\n/gm, "")
+            .replace(/\\x00+[\\s\\S]*$/, "") + "\\x00";
+
+        const formattedFrame = "a" + JSON.stringify([cleanStomp]);
+        console.log("[Worker Replay] Triggering sanitized SockJS frame:", formattedFrame);
+
+        const event = new MessageEvent("message", {
+          data: formattedFrame,
+          origin: socket.url
+        });
+
+        socket.dispatchEvent(event);
+        return "Simulated receive in Worker!";
+      }
+      return "Worker socket not ready (total=" + self.__TESTING_SOCKETS__.length + ")";
+    };
+  `;
+
+  void chrome.debugger.sendCommand(  { tabId , sessionId}, "Runtime.evaluate", {
+    expression: hookCode,
+    silent: true
+  });
+}
+
+async function sendReceivedWorkerSocketMessage(tabId: number, workerSessionId: string, message: string) {
+  const hookCode = `self.__receiveTestMessage(${JSON.stringify(message)})`;
+  void chrome.debugger.sendCommand(  { tabId , sessionId: workerSessionId}, "Runtime.evaluate", {
+    expression: hookCode,
+    silent: true
+  });
+}
+
+async function sendSentWorkerSocketMessage(tabId: number, workerSessionId: string, message: string) {
+  const hookCode = `self.__sendTestMessage(${JSON.stringify(message)})`;
+  void chrome.debugger.sendCommand(  { tabId , sessionId: workerSessionId}, "Runtime.evaluate", {
+    expression: hookCode,
+    silent: true
+  });
+}
+
 // Handle Debugger Detached unexpectedly
 chrome.debugger.onDetach.addListener(async (source: chrome.debugger.Debuggee, reason: string) => {
   const tabId = source.tabId;
@@ -105,16 +292,12 @@ chrome.debugger.onDetach.addListener(async (source: chrome.debugger.Debuggee, re
     await stopSession(recording.sessionId);
     activeRecordings.delete(tabId);
     attachedTargets.clear();
-
-    broadcastMessage({
-      type: 'RECORDING_STOPPED',
-      tabId,
-      reason: `Debugger detached: ${reason}`
-    });
+    tabState.clear();
   }
 });
 
 // Communication with Popup and Dashboard UI
+
 chrome.runtime.onMessage.addListener((message: ExtensionRequestMessage, sender: chrome.runtime.MessageSender, sendResponse: (response?: any) => void) => {
   handleMessage(message, sender)
     .then(sendResponse)
@@ -137,20 +320,6 @@ async function handleMessage(message: ExtensionRequestMessage, sender: chrome.ru
       const tab = await chrome.tabs.get(tabId);
       const sessionId = await createSession(tab.url || '', tab.title || '', message.sessionName);
 
-      // Attach debugger protocol
-      await chrome.debugger.attach({ tabId }, '1.3');
-      await chrome.debugger.sendCommand({ tabId }, 'Network.enable');
-      await chrome.debugger.sendCommand({ tabId }, "Target.setAutoAttach", {
-        autoAttach: true,
-        waitForDebuggerOnStart: true,
-        flatten: true,
-        filter: [
-          {type: "worker", exclude:false},
-          {type: "service_worker", exclude:false},
-          {type: "shared_worker", exclude:false},
-        ]
-      })
-
       activeRecordings.set(tabId, {
         sessionId,
         tabUrl: tab.url || '',
@@ -167,15 +336,14 @@ async function handleMessage(message: ExtensionRequestMessage, sender: chrome.ru
       }
 
       const recording = activeRecordings.get(tabId)!;
-      await chrome.debugger.detach({ tabId });
       await stopSession(recording.sessionId);
+      broadcastMessage({
+        type: 'RECORDING_STOPPED',
+        tabId,
+        reason: "User stopped recording"
+      });
       activeRecordings.delete(tabId);
-      for (const targetId of attachedTargets.keys()) {
-        await chrome.debugger.detach({ targetId });
-      }
-      attachedTargets.clear();
-
-      return { success: true, isRecording: false, sessionId: recording.sessionId };
+           return { success: true, isRecording: false, sessionId: recording.sessionId };
     }
 
     case 'GET_RECORDING_STATUS': {
@@ -194,7 +362,7 @@ async function handleMessage(message: ExtensionRequestMessage, sender: chrome.ru
     }
 
     case 'REPLAY_SESSION': {
-      const { tabId, sessionId, mode, delayMs = 500 } = message;
+      const { tabId, sessionId } = message;
       if (!tabId || !sessionId) throw new Error('Tab ID and Session ID are required for replay');
 
       if (isReplayInProgress) {
@@ -207,7 +375,7 @@ async function handleMessage(message: ExtensionRequestMessage, sender: chrome.ru
       }
 
       isReplayInProgress = true;
-      executeReplaySequence(tabId, frames, mode, delayMs)
+      executeReplaySequence(tabId, frames)
         .finally(() => { isReplayInProgress = false; });
       return { success: true, frameCount: frames.length };
     }
@@ -215,10 +383,8 @@ async function handleMessage(message: ExtensionRequestMessage, sender: chrome.ru
     case 'REPLAY_SINGLE_FRAME': {
       const { tabId, frame } = message;
       if (!tabId || !frame) throw new Error('Tab ID and frame object are required for replay');
-
-      const mode: ReplayMode = 'CLIENT';
-      const result = await executeReplaySequence(tabId, [frame], mode, 0, true);
-      return { success: true, ...result };
+      //await replayMessageToWorker(tabId, {topic: frame.destination, body: frame.body})
+      return { success: true };
     }
 
     default:
@@ -229,19 +395,9 @@ async function handleMessage(message: ExtensionRequestMessage, sender: chrome.ru
 async function executeReplaySequence(
   tabId: number,
   frames: FrameRecord[],
-  mode: ReplayMode = 'CLIENT',
-  delayMs: number,
-  bypassFilter = false
 ): Promise<any> {
-  if (bypassFilter && frames.length === 1) {
-    const f = frames[0];
-    console.log(`[STOMP Interceptor Replay] Replaying single frame (Command: ${f.stompCommand}, Direction: ${f.direction}, Mode: ${mode})`);
-  } else {
-    console.log(`[STOMP Interceptor Replay] Replaying session: ${frames.length} frames (Mode: ${mode})`);
-  }
-
-  const replayableFrames = bypassFilter ? frames : frames.filter(f => {
-    return f.direction === 'SENT' && ['SEND', 'SUBSCRIBE', 'UNSUBSCRIBE', 'CONNECT'].includes(f.stompCommand);
+  const replayableFrames =  frames.filter(f => {
+    return f.direction === 'RECEIVED' || f.direction === "SENT";
   });
 
   if (replayableFrames.length === 0) {
@@ -258,22 +414,6 @@ async function executeReplaySequence(
   }
 
   try {
-    if (mode === 'CLIENT') {
-      const knownSubs = activeTabSubscriptions.get(tabId) || new Map<string, string>();
-      const knownSubsObj = Object.fromEntries(knownSubs);
-      console.log('[STOMP Interceptor Replay] Bootstrap: injecting', knownSubs.size, 'known subscription(s) from WS intercept:', knownSubsObj);
-      await chrome.scripting.executeScript({
-        target: { tabId },
-        world: 'MAIN',
-        func: (subsObj: Record<string, string>) => {
-          (window as any).__stompReplaySubs = Object.assign({}, subsObj, (window as any).__stompReplaySubs || {});
-          console.log('[STOMP Interceptor Replay] Bootstrap complete. Tracked subs:', JSON.stringify((window as any).__stompReplaySubs));
-        },
-        args: [knownSubsObj]
-      }).catch((err) => {
-        console.warn('[STOMP Interceptor Replay] Bootstrap inject failed:', err);
-      });
-    }
 
     let replayedCount = 0;
     let errorCount = 0;
@@ -282,54 +422,14 @@ async function executeReplaySequence(
       const frame = replayableFrames[i];
       let frameSuccess = false;
       let frameError: string | null = null;
-
-        if (mode === 'CLIENT') {
-        try {
-          await chrome.scripting.executeScript({
-            target: { tabId },
-            world: 'MAIN',
-            func: (command: string, destination: string, headersJson: string, payloadStr: string) => {
-              const win = window as any;
-              if (!win.client) {
-                console.warn('[STOMP Interceptor Replay] window.client not found.');
-                return false;
-              }
-              const headers = JSON.parse(headersJson);
-
-              if (!win.__stompReplaySubs) win.__stompReplaySubs = {};
-
-              if (command === 'SEND') {
-                win.client.send(destination, headers, payloadStr);
-              } else if (command === 'SUBSCRIBE') {
-                if (win.__stompReplaySubs[destination]) {
-                  return 'SKIPPED';
-                }
-                const subId = win.client.subscribe(destination, () => { });
-                win.__stompReplaySubs[destination] = subId || destination;
-              } else if (command === 'UNSUBSCRIBE') {
-                if (!win.__stompReplaySubs || !win.__stompReplaySubs[destination]) {
-                  return 'SKIPPED';
-                }
-                const unsubId = win.__stompReplaySubs[destination];
-                win.client.unsubscribe(unsubId);
-                delete win.__stompReplaySubs[destination];
-              }
-              return true;
-            },
-            args: [
-              frame.stompCommand,
-              frame.destination,
-              JSON.stringify(frame.headers || {}),
-              frame.body || ''
-            ]
-          });
+      try {
+          await replayMessageToWorker(tabId, {topic: frame.destination, body: frame.body, direction: frame.direction})
           frameSuccess = true;
           replayedCount++;
         } catch (err: any) {
           frameError = err.message;
           errorCount++;
           console.warn(`[Replay] CLIENT frame #${i + 1} failed:`, err);
-        }
       }
 
       broadcastMessage({
@@ -381,18 +481,83 @@ async function executeReplaySequence(
   }
 }
 
-function buildStompFrameFromRecord(frame: FrameRecord): string {
-  let frameStr = (frame.stompCommand || 'MESSAGE') + '\n';
-  const headers = frame.headers || {};
-  for (const [key, val] of Object.entries(headers)) {
-    frameStr += `${key}:${val}\n`;
+async function replayMessageToWorker(tabId: number,
+  { topic, body, direction } : { topic: string, body: string, direction: FrameDirection}) {
+  
+  const state = tabState.get(tabId);
+  if (!state?.workerSession) {
+    throw new Error(`No worker session attached for tab ${tabId}`);
   }
-  frameStr += '\n';
-  if (frame.body) {
-    frameStr += frame.body;
+  const resolvedSubId = activeTabSubscriptions.get(tabId)?.get(topic) || "sub-0";
+  if (direction === "RECEIVED") {
+    await sendReceivedWorkerSocketMessage(tabId, state.workerSession, createReceivedSockMessage(body, topic, resolvedSubId));
+  } else if(direction === "SENT") { 
+    await sendSentWorkerSocketMessage(tabId, state.workerSession, createSentSockMessage(body, topic));
   }
-  frameStr += '\u0000';
-  return frameStr;
+}
+
+
+function createSentSockMessage(body: string, topic: string) { 
+  let bodyStr: string;
+  if (typeof body === "string") {
+    bodyStr = body.trim();
+    try {
+      const parsed = JSON.parse(bodyStr);
+      if (typeof parsed === "string") {
+        bodyStr = parsed;
+      }
+    } catch {
+      // Plain text body 
+    }
+  } else { 
+    bodyStr = JSON.stringify(body);
+  }
+  const NULL_CHAR = String.fromCharCode(0);
+  const safeBodyStr = bodyStr.split(NULL_CHAR)[0];
+
+  const stompFrame =
+    `SEND\n` +
+    `destination:${topic}\n` +
+    `clientSessionId: 5636103b-4d3e-4e01-83e7-a92ea4d8578c\n` +
+    `debugCommands:\n` +
+    `clientUserName:fkm2\n` +
+    `consoleId:1\n` +
+    `content-length:30\n\n` +
+    `${safeBodyStr}${NULL_CHAR}`;
+  
+
+  return JSON.stringify([stompFrame]);
+}
+
+function createReceivedSockMessage(body: string, topic: string, resolvedSubId: string) { 
+  let bodyStr: string;
+  if (typeof body === "string") {
+    bodyStr = body.trim();
+    try {
+      const parsed = JSON.parse(bodyStr);
+      if (typeof parsed === "string") {
+        bodyStr = parsed;
+      }
+    } catch {
+      // Plain text body 
+    }
+  } else { 
+    bodyStr = JSON.stringify(body);
+  }
+  const NULL_CHAR = String.fromCharCode(0);
+  const safeBodyStr = bodyStr.split(NULL_CHAR)[0];
+
+  // Build STOMP MESSAGE frame + SockJS a["..."] wrapper
+  const stompFrame =
+    `MESSAGE\n` +
+    `destination:${topic}\n` +
+    `subscription:${resolvedSubId}\n` +
+    `message-id:replay-${Date.now()}\n` +
+    `content-type:application/json\n\n` +
+    `${safeBodyStr}${NULL_CHAR}`;
+  
+
+  return "a" + JSON.stringify([stompFrame]);
 }
 
 function broadcastMessage(msg: ExtensionBroadcastEvent): void {
