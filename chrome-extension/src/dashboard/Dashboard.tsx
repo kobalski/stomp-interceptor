@@ -7,6 +7,7 @@ import {
   deleteFrames,
   importSessionJSON,
   updateFrame,
+  addManualFrame,
 } from '../lib/db';
 import SessionCard from '../components/SessionCard';
 import FrameTable from '../components/FrameTable';
@@ -142,6 +143,34 @@ export default function Dashboard() {
       }
     } catch (err: any) {
       addToast('Failed to save payload: ' + err.message, 'error');
+    }
+  }, [activeSessionId, addToast]);
+
+  const handleAddNewFrame = useCallback(async () => {
+    if (!activeSessionId) {
+      addToast('Please select or record a session first', 'error');
+      return;
+    }
+    try {
+      const newFrameId = await addManualFrame(
+        activeSessionId,
+        'SEND',
+        '/app/messages',
+        'SENT',
+        '{\n  "command": "SEND",\n  "payload": "{\\"status\\": \\"active\\", \\"data\\": {\\"key\\": \\"value\\"}}"\n}'
+      );
+      addToast(`New frame #${newFrameId} added to session`, 'success');
+
+      const frames = await getSessionFrames(activeSessionId);
+      setCurrentFrames(frames);
+      setSelectedFrameId(newFrameId);
+
+      const sessionList = await getSessions();
+      setSessions(sessionList);
+      const current = sessionList.find(s => s.id === activeSessionId);
+      if (current) setActiveSessionObj(current);
+    } catch (err: any) {
+      addToast('Failed to add frame: ' + err.message, 'error');
     }
   }, [activeSessionId, addToast]);
 
@@ -381,6 +410,17 @@ export default function Dashboard() {
               value={searchFilter}
               onChange={(e) => setSearchFilter(e.target.value)}
             />
+
+            {/* Add New Frame */}
+            <button
+              className="btn btn-secondary"
+              style={{ padding: '0.45rem 0.8rem', fontSize: '0.75rem', borderColor: 'var(--accent-cyan)', color: 'var(--accent-cyan)' }}
+              disabled={!activeSessionId}
+              onClick={handleAddNewFrame}
+              title="Add a new STOMP frame with recursive JSON payload to this session"
+            >
+              ➕ Add Message
+            </button>
 
             {/* Replay Selected Frames */}
             <button

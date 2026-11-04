@@ -79,6 +79,38 @@ export async function updateFrame(frameId: number, newBody: string): Promise<voi
   });
 }
 
+export async function addManualFrame(
+  sessionId: number,
+  command = 'SEND',
+  destination = '/app/messages',
+  direction: FrameDirection = 'SENT',
+  body = '{\n  "payload": "{\\"status\\": \\"active\\", \\"data\\": {\\"key\\": \\"value\\"}}"\n}'
+): Promise<number> {
+  if (!sessionId) throw new Error('No active session');
+
+  const headers: Record<string, string> = { destination };
+  const rawPayload = buildStompFrame(command, headers, body);
+
+  const frameId = await db.transaction('rw', db.sessions, db.frames, async () => {
+    const id = await db.frames.add({
+      sessionId,
+      timestamp: Date.now(),
+      direction,
+      stompCommand: command,
+      destination,
+      headers,
+      body,
+      rawPayload
+    });
+
+    const count = await db.frames.where('sessionId').equals(sessionId).count();
+    await db.sessions.update(sessionId, { frameCount: count });
+    return id;
+  });
+
+  return frameId;
+}
+
 export async function deleteFrame(frameId: number, sessionId: number): Promise<void> {
   if (!frameId || !sessionId) return;
   await db.transaction('rw', db.sessions, db.frames, async () => {

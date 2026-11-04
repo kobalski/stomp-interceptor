@@ -255,3 +255,68 @@
 .json-btn-add:hover {
   background: var(--bg-hover, #374151);
 }
+
+/* Embedded recursive JSON styles */
+.json-tree-node.embedded-node {
+  border-left-color: rgba(0, 194, 203, 0.45);
+  background: rgba(0, 194, 203, 0.03);
+  border-radius: 0 4px 4px 0;
+}
+
+.json-badge-embedded {
+  background: linear-gradient(135deg, rgba(0, 194, 203, 0.2), rgba(255, 122, 48, 0.2));
+  border: 1px solid rgba(0, 194, 203, 0.6);
+  color: var(--accent-cyan, #00C2CB);
+  font-size: 0.62rem;
+  font-weight: 700;
+  padding: 0.05rem 0.35rem;
+  border-radius: 3px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.json-btn-pill {
+  background: var(--bg-card, #1f2937);
+  border: 1px solid var(--border, #374151);
+  color: var(--text-muted, #9ca3af);
+  font-size: 0.65rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.json-btn-pill:hover {
+  color: var(--text-main, #f9fafb);
+  border-color: var(--accent-cyan, #00C2CB);
+}
+
+.json-btn-add-json {
+  background: rgba(0, 194, 203, 0.15);
+  color: var(--accent-cyan, #00C2CB);
+  border: 1px solid rgba(0, 194, 203, 0.4);
+  border-radius: 3px;
+  font-size: 0.68rem;
+  padding: 0.1rem 0.35rem;
+  cursor: pointer;
+  margin-left: 0.2rem;
+}
+
+.json-btn-add-json:hover {
+  background: rgba(0, 194, 203, 0.3);
+}
+
+.json-btn-parse {
+  background: rgba(255, 122, 48, 0.15);
+  color: var(--accent-orange, #FF7A30);
+  border: 1px solid rgba(255, 122, 48, 0.4);
+  border-radius: 3px;
+  font-size: 0.65rem;
+  padding: 0.1rem 0.35rem;
+  cursor: pointer;
+  margin-left: 0.3rem;
+  white-space: nowrap;
+}
+
+.json-btn-parse:hover {
+  background: rgba(255, 122, 48, 0.3);
+}
