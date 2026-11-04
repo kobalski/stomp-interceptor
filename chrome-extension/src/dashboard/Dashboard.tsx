@@ -405,27 +405,40 @@ export default function Dashboard() {
     const filtered = currentFrames.filter(f =>
       !filter || (f.destination && f.destination.toLowerCase().includes(filter))
     );
+    const parseTs = (ts: any): number => {
+      if (typeof ts === 'number') {
+        return (ts > 0 && ts < 1e11) ? Math.round(ts * 1000) : Math.round(ts);
+      }
+      if (typeof ts === 'string') {
+        const num = Number(ts.trim());
+        if (!isNaN(num)) return (num > 0 && num < 1e11) ? Math.round(num * 1000) : Math.round(num);
+        const d = new Date(ts).getTime();
+        if (!isNaN(d)) return d;
+      }
+      return 0;
+    };
+
     const selected = filtered
       .filter(f => f.id !== undefined && checkedFrameIds.has(f.id))
-      .sort((a, b) => a.timestamp - b.timestamp);
+      .sort((a, b) => parseTs(a.timestamp) - parseTs(b.timestamp));
 
     if (selected.length === 0) return;
 
     setIsReplayingSelected(true);
     setReplayBtnText(`⏳ Replaying 0/${selected.length}…`);
 
-    let prevTimestamp = selected[0].timestamp;
+    let prevTimestamp = parseTs(selected[0].timestamp);
 
     for (let i = 0; i < selected.length; i++) {
       const f = selected[i];
-      const delay = i === 0 ? 0 : (f.timestamp - prevTimestamp);
-      prevTimestamp = f.timestamp;
+      const currentTs = parseTs(f.timestamp);
+      const delay = i === 0 ? 0 : (currentTs - prevTimestamp);
+      prevTimestamp = currentTs;
 
       if (delay > 0) {
-        await new Promise(resolve => setTimeout(resolve, delay));
+        await new Promise(resolve => setTimeout(resolve, Math.min(delay, 300000)));
       }
 
-      
       try {
         await chrome.runtime.sendMessage({
           type: 'REPLAY_SINGLE_FRAME',

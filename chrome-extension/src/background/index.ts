@@ -270,7 +270,7 @@ async function patchWebWorker(tabId: number, sessionId: string) {
 
 async function sendReceivedWorkerSocketMessage(tabId: number, workerSessionId: string, message: string) {
   const hookCode = `self.__receiveTestMessage(${JSON.stringify(message)})`;
-  void chrome.debugger.sendCommand(  { tabId , sessionId: workerSessionId}, "Runtime.evaluate", {
+  return await chrome.debugger.sendCommand({ tabId, sessionId: workerSessionId }, "Runtime.evaluate", {
     expression: hookCode,
     silent: true
   });
@@ -278,7 +278,7 @@ async function sendReceivedWorkerSocketMessage(tabId: number, workerSessionId: s
 
 async function sendSentWorkerSocketMessage(tabId: number, workerSessionId: string, message: string) {
   const hookCode = `self.__sendTestMessage(${JSON.stringify(message)})`;
-  void chrome.debugger.sendCommand(  { tabId , sessionId: workerSessionId}, "Runtime.evaluate", {
+  return await chrome.debugger.sendCommand({ tabId, sessionId: workerSessionId }, "Runtime.evaluate", {
     expression: hookCode,
     silent: true
   });
@@ -383,7 +383,11 @@ async function handleMessage(message: ExtensionRequestMessage, sender: chrome.ru
     case 'REPLAY_SINGLE_FRAME': {
       const { tabId, frame } = message;
       if (!tabId || !frame) throw new Error('Tab ID and frame object are required for replay');
-      //await replayMessageToWorker(tabId, {topic: frame.destination, body: frame.body})
+      await replayMessageToWorker(tabId, {
+        topic: frame.destination,
+        body: frame.body,
+        direction: frame.direction
+      });
       return { success: true };
     }
 
@@ -392,13 +396,44 @@ async function handleMessage(message: ExtensionRequestMessage, sender: chrome.ru
   }
 }
 
+export function parseTimestampToMs(val: any): number {
+  if (val === null || val === undefined) return 0;
+  if (typeof val === 'number') {
+    // If timestamp is in seconds (e.g. UNIX seconds < 1e11, or relative seconds like 0, 5, 10...)
+    // Year 1973 in milliseconds is 1e11 (100,000,000,000). Modern ms timestamps are ~1.7e12.
+    // If val is less than 1e11, it is in seconds, so multiply by 1000 to get milliseconds.
+    if (val > 0 && val < 1e11) {
+      return Math.round(val * 1000);
+    }
+    return Math.round(val);
+  }
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    const asNum = Number(trimmed);
+    if (!isNaN(asNum)) {
+      if (asNum > 0 && asNum < 1e11) {
+        return Math.round(asNum * 1000);
+      }
+      return Math.round(asNum);
+    }
+    const asDate = new Date(trimmed).getTime();
+    if (!isNaN(asDate)) {
+      return asDate;
+    }
+  }
+  return 0;
+}
+
 async function executeReplaySequence(
   tabId: number,
   frames: FrameRecord[],
 ): Promise<any> {
-  const replayableFrames =  frames.filter(f => {
-    return f.direction === 'RECEIVED' || f.direction === "SENT";
-  });
+  const replayableFrames = frames
+    .filter(f => {
+      const dir = (f.direction || '').toUpperCase();
+      return dir === 'RECEIVED' || dir === 'SENT';
+    })
+    .sort((a, b) => parseTimestampToMs(a.timestamp) - parseTimestampToMs(b.timestamp));
 
   if (replayableFrames.length === 0) {
     broadcastMessage({
@@ -408,13 +443,12 @@ async function executeReplaySequence(
       totalFrames: 0,
       replayedFrames: 0,
       skippedFrames: frames.length,
-      message: `No 'SENT' frames to replay in this session`
+      message: `No frames to replay in this session`
     });
     return;
   }
 
   try {
-
     let replayedCount = 0;
     let errorCount = 0;
 
@@ -423,13 +457,17 @@ async function executeReplaySequence(
       let frameSuccess = false;
       let frameError: string | null = null;
       try {
-          await replayMessageToWorker(tabId, {topic: frame.destination, body: frame.body, direction: frame.direction})
-          frameSuccess = true;
-          replayedCount++;
-        } catch (err: any) {
-          frameError = err.message;
-          errorCount++;
-          console.warn(`[Replay] CLIENT frame #${i + 1} failed:`, err);
+        await replayMessageToWorker(tabId, {
+          topic: frame.destination,
+          body: frame.body,
+          direction: frame.direction
+        });
+        frameSuccess = true;
+        replayedCount++;
+      } catch (err: any) {
+        frameError = err.message;
+        errorCount++;
+        console.warn(`[Replay] Frame #${i + 1} failed:`, err);
       }
 
       broadcastMessage({
@@ -446,13 +484,16 @@ async function executeReplaySequence(
         }
       });
 
+      // Wait according to the timestamp difference between the current frame and the next frame
       if (i < replayableFrames.length - 1) {
-        const currentTimestamp = replayableFrames[i].timestamp;
-        const nextTimestamp = replayableFrames[i + 1].timestamp;
+        const currentTimestamp = parseTimestampToMs(replayableFrames[i].timestamp);
+        const nextTimestamp = parseTimestampToMs(replayableFrames[i + 1].timestamp);
         const timestampDelta = nextTimestamp - currentTimestamp;
 
         if (timestampDelta > 0) {
-          await new Promise(resolve => setTimeout(resolve, timestampDelta));
+          const delayMs = Math.min(timestampDelta, 300000); // safety cap at 5 minutes
+          console.log(`[Replay] Waiting ${delayMs}ms before replaying frame #${i + 2}...`);
+          await new Promise(resolve => setTimeout(resolve, delayMs));
         }
       }
     }
