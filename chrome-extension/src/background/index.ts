@@ -63,8 +63,87 @@ const activeTabSubscriptions = new Map<number, Map<string, string>>();
 const attachedTargets = new Map<string, number>();
 const workerSessions = new Map();
 
+export const DEFAULT_TARGET_URL = 'http://localhost:8080';
+let targetAttachUrl = DEFAULT_TARGET_URL;
+
+// Load targetAttachUrl from storage on startup
+chrome.storage.local.get(['target_attach_url'], (res) => {
+  if (res && typeof res.target_attach_url === 'string' && res.target_attach_url.trim()) {
+    targetAttachUrl = res.target_attach_url.trim();
+  } else {
+    chrome.storage.local.set({ target_attach_url: DEFAULT_TARGET_URL });
+  }
+});
+
+// Dynamically listen to storage updates for targetAttachUrl
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === 'local' && changes.target_attach_url) {
+    const newVal = changes.target_attach_url.newValue;
+    if (typeof newVal === 'string') {
+      targetAttachUrl = newVal.trim();
+      console.log('[Background] Updated target attach URL:', targetAttachUrl);
+    }
+  }
+});
+
+export function isUrlMatching(tabUrl: string | undefined, targetUrl: string | undefined): boolean {
+  if (!tabUrl || !targetUrl) return false;
+  const target = targetUrl.trim();
+  if (!target) return false;
+
+  // Direct exact match
+  if (tabUrl === target) return true;
+
+  // Strip trailing slashes
+  const normTab = tabUrl.replace(/\/+$/, '');
+  const normTarget = target.replace(/\/+$/, '');
+  if (normTab === normTarget) return true;
+
+  // Prefix match (e.g. target is http://localhost:8080 and tab is http://localhost:8080/path)
+  if (normTab.startsWith(normTarget + '/') || normTab.startsWith(normTarget + '?') || normTab.startsWith(normTarget + '#')) {
+    return true;
+  }
+
+  // Origin comparison if valid URLs
+  try {
+    const tabObj = new URL(tabUrl);
+    const targetWithProto = target.includes('://') ? target : `http://${target}`;
+    const targetObj = new URL(targetWithProto);
+
+    if (tabObj.origin.toLowerCase() === targetObj.origin.toLowerCase()) {
+      if (targetObj.pathname && targetObj.pathname !== '/') {
+        return tabObj.pathname.toLowerCase().startsWith(targetObj.pathname.toLowerCase());
+      }
+      return true;
+    }
+  } catch (_) {}
+
+  // Substring match for domains e.g. "localhost:8080" or "localhost"
+  if (normTab.toLowerCase().includes(normTarget.toLowerCase())) {
+    return true;
+  }
+
+  return false;
+}
+
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-  if (changeInfo.status === "loading" && tab.url?.includes("localhost")) {
+  const urlToCheck = changeInfo.url || tab.url;
+  if (!urlToCheck) return;
+
+  if (changeInfo.status === "loading") {
+    // Only attach debugger if tab URL matches targetAttachUrl
+    if (!isUrlMatching(urlToCheck, targetAttachUrl)) {
+      // If previously attached but navigated to non-matching URL, detach
+      const state = tabState.get(tabId);
+      if (state?.attached) {
+        try {
+          await chrome.debugger.detach({ tabId });
+        } catch (_) {}
+        tabState.delete(tabId);
+      }
+      return;
+    }
+
     let state = tabState.get(tabId);
     if (state) return;
 

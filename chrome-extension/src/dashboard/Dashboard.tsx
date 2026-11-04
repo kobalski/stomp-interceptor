@@ -31,6 +31,7 @@ export default function Dashboard() {
   const [checkedFrameIds, setCheckedFrameIds] = useState<Set<number>>(new Set());
   const [searchFilter, setSearchFilter] = useState('');
   const [replayFilter, setReplayFilter] = useState<ReplayDirectionFilter>('ALL');
+  const [targetUrl, setTargetUrl] = useState('');
   const [replayBtnText, setReplayBtnText] = useState('▶ Replay Selected');
   const [isReplayingSelected, setIsReplayingSelected] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
@@ -211,6 +212,31 @@ export default function Dashboard() {
   useEffect(() => {
     loadSessions();
   }, [loadSessions]);
+
+  useEffect(() => {
+    chrome.storage.local.get(['target_attach_url'], (res) => {
+      if (res && res.target_attach_url) {
+        setTargetUrl(res.target_attach_url);
+      } else {
+        setTargetUrl('http://localhost:8080');
+      }
+    });
+
+    const handleStorageChange = (changes: { [key: string]: chrome.storage.StorageChange }, areaName: string) => {
+      if (areaName === 'local' && changes.target_attach_url) {
+        setTargetUrl(changes.target_attach_url.newValue || '');
+      }
+    };
+    chrome.storage.onChanged.addListener(handleStorageChange);
+    return () => chrome.storage.onChanged.removeListener(handleStorageChange);
+  }, []);
+
+  const handleSaveTargetUrl = useCallback((newUrl: string) => {
+    const trimmed = newUrl.trim();
+    setTargetUrl(trimmed);
+    chrome.storage.local.set({ target_attach_url: trimmed });
+    addToast(`Debugger target URL saved: ${trimmed}`, 'success');
+  }, [addToast]);
 
   const handleFrameSelect = useCallback((frame: FrameRecord) => {
     if (frame.id !== undefined) {
@@ -573,6 +599,36 @@ export default function Dashboard() {
               />
             ))
           )}
+        </div>
+
+        {/* Target Debugger URL Setting */}
+        <div className="sidebar-target-config">
+          <div className="sidebar-target-label">
+            <span>Target Debugger URL</span>
+            <span className="sidebar-target-hint">Auto-attach</span>
+          </div>
+          <div style={{ display: 'flex', gap: '0.35rem' }}>
+            <input
+              type="text"
+              className="target-url-input"
+              placeholder="e.g. http://localhost:8080"
+              value={targetUrl}
+              onChange={(e) => setTargetUrl(e.target.value)}
+              onBlur={() => handleSaveTargetUrl(targetUrl)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleSaveTargetUrl(targetUrl);
+              }}
+              title="Debugger only attaches to tabs matching this URL"
+            />
+            <button
+              className="btn btn-secondary"
+              style={{ padding: '0.3rem 0.55rem', fontSize: '0.72rem', whiteSpace: 'nowrap' }}
+              onClick={() => handleSaveTargetUrl(targetUrl)}
+              title="Save target URL"
+            >
+              Save
+            </button>
+          </div>
         </div>
       </div>
 

@@ -25,6 +25,7 @@ export default function Popup() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState('');
   const [replayFilter, setReplayFilter] = useState<ReplayDirectionFilter>('ALL');
+  const [targetUrl, setTargetUrl] = useState('');
   
   const [isReplaying, setIsReplaying] = useState(false);
   const [replayBtnText, setReplayBtnText] = useState('► Replay Session');
@@ -89,6 +90,12 @@ export default function Popup() {
         setReplayBtnText('Replaying...');
         isReplayingRef.current = true;
       }
+
+      chrome.storage.local.get(['target_attach_url'], (res) => {
+        if (!cancelled) {
+          setTargetUrl(res?.target_attach_url || 'http://localhost:8080');
+        }
+      });
     }
 
     init();
@@ -221,6 +228,28 @@ export default function Popup() {
     }
   }, [selectedSessionId, addToast]);
 
+  const handleSaveTargetUrl = useCallback((urlToSave: string) => {
+    const trimmed = urlToSave.trim();
+    setTargetUrl(trimmed);
+    chrome.storage.local.set({ target_attach_url: trimmed });
+    addToast(`Target URL saved: ${trimmed}`, 'success');
+  }, [addToast]);
+
+  const handleUseCurrentTabUrl = useCallback(async () => {
+    if (!currentTabId) return;
+    try {
+      const tab = await chrome.tabs.get(currentTabId);
+      if (tab?.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('chrome-extension://')) {
+        const origin = new URL(tab.url).origin;
+        handleSaveTargetUrl(origin);
+      } else {
+        addToast('Current tab is not a valid web page', 'error');
+      }
+    } catch (_) {
+      addToast('Could not get current tab URL', 'error');
+    }
+  }, [currentTabId, handleSaveTargetUrl, addToast]);
+
   const handleOpenDashboard = useCallback(() => {
     chrome.runtime.openOptionsPage();
   }, []);
@@ -236,6 +265,49 @@ export default function Popup() {
           <span>STOMP Interceptor</span>
         </div>
         <StatusPill isRecording={isRecording} />
+      </div>
+
+      {/* Target URL Setting */}
+      <div className="section">
+        <div className="section-title">Debugger Target URL</div>
+        <div className="form-group" style={{ marginBottom: 0 }}>
+          <label htmlFor="targetUrl" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>Attach to Tab URL</span>
+            <span style={{ fontSize: '0.65rem', color: 'var(--accent-cyan)' }}>Auto-attach match</span>
+          </label>
+          <div className="target-url-container">
+            <input
+              type="text"
+              id="targetUrl"
+              className="target-url-input"
+              placeholder="e.g. http://localhost:8080"
+              value={targetUrl}
+              onChange={e => setTargetUrl(e.target.value)}
+              onBlur={() => handleSaveTargetUrl(targetUrl)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') handleSaveTargetUrl(targetUrl);
+              }}
+              title="Debugger only attaches to tabs matching this URL"
+            />
+            <button
+              className="btn btn-secondary btn-mini"
+              onClick={handleUseCurrentTabUrl}
+              title="Set to active tab origin"
+            >
+              Current
+            </button>
+            <button
+              className="btn btn-secondary btn-mini"
+              onClick={() => handleSaveTargetUrl(targetUrl)}
+              title="Save target URL"
+            >
+              Save
+            </button>
+          </div>
+          <p style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '0.3rem' }}>
+            Debugger attaches only if the tab URL matches this value.
+          </p>
+        </div>
       </div>
 
       {/* Recording Controls */}
